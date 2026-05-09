@@ -1690,6 +1690,7 @@ initFrame:SetScript("OnEvent", function(self)
         end
     end
     ns.HideTBBPlaceholders = HideTBBPlaceholder
+    ns.ShowTBBPlaceholders = UpdateTBBPlaceholder
     EllesmereUI:RegisterOnHide(HideTBBPlaceholder)
 
     -- Buff spell picker for tracked buff bars (reuses CDM buff spell list)
@@ -9522,6 +9523,9 @@ initFrame:SetScript("OnEvent", function(self)
     local _cdmButtonTipQueued = false
     EllesmereUI:RegisterOnHide(function()
         if _cdmButtonTip then _cdmButtonTip:Hide() end
+        -- Hide force-shown custom aura bar icons when panel closes
+        ns._cdmBarsPageOpen = false
+        if ns.UpdateCustomBuffBars then ns.UpdateCustomBuffBars() end
     end)
 
     ---------------------------------------------------------------------------
@@ -9534,8 +9538,20 @@ initFrame:SetScript("OnEvent", function(self)
         disabledPages = {},
         disabledPageTooltips = {},
         buildPage   = function(pageName, parent, yOffset)
+            -- Clear TBB placeholders when switching to any non-Tracking Bars page
+            if pageName ~= PAGE_BUFF_BARS and ns._tbbPlaceholderMode then
+                ns._tbbPlaceholderMode = false
+                if ns.HideTBBPlaceholders then ns.HideTBBPlaceholders() end
+            end
+            -- Manage custom aura bar preview: flag-based, not GetActivePage
+            if pageName ~= PAGE_CDM_BARS and ns._cdmBarsPageOpen then
+                ns._cdmBarsPageOpen = false
+                if ns.UpdateCustomBuffBars then ns.UpdateCustomBuffBars() end
+            end
             if pageName == PAGE_CDM_BARS then
+                ns._cdmBarsPageOpen = true
                 local h2 = BuildCDMBarsPage(pageName, parent, yOffset)
+                if ns.UpdateCustomBuffBars then ns.UpdateCustomBuffBars() end
                 -- Show one-time button settings tip after preview renders
                 C_Timer.After(0.1, ShowCDMButtonTip)
                 return h2
@@ -9556,7 +9572,21 @@ initFrame:SetScript("OnEvent", function(self)
             return nil
         end,
         onPageCacheRestore = function(pageName)
+            -- Same flag management as buildPage
+            if pageName ~= PAGE_BUFF_BARS and ns._tbbPlaceholderMode then
+                ns._tbbPlaceholderMode = false
+                if ns.HideTBBPlaceholders then ns.HideTBBPlaceholders() end
+            end
+            if pageName ~= PAGE_CDM_BARS and ns._cdmBarsPageOpen then
+                ns._cdmBarsPageOpen = false
+                if ns.UpdateCustomBuffBars then ns.UpdateCustomBuffBars() end
+            end
+            if pageName == PAGE_BUFF_BARS then
+                if ns.ShowTBBPlaceholders then ns.ShowTBBPlaceholders() end
+            end
             if pageName == PAGE_CDM_BARS then
+                ns._cdmBarsPageOpen = true
+                if ns.UpdateCustomBuffBars then ns.UpdateCustomBuffBars() end
                 -- Re-sync _cdmPreview after cache restore and refresh the preview
                 if not _cdmPreview and EllesmereUI._contentHeaderPreview then
                     _cdmPreview = EllesmereUI._contentHeaderPreview

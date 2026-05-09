@@ -1415,9 +1415,14 @@ ShowWidgetTooltip = function(label, text, opts)
     end
     -- Apply text color override or default white
     if opts and opts.color then
-        tt.text:SetTextColor(opts.color[1], opts.color[2], opts.color[3], 0.80)
+        tt.text:SetTextColor(opts.color[1], opts.color[2], opts.color[3], opts.color[4] or 0.80)
     else
         tt.text:SetTextColor(1, 1, 1, 0.80)
+    end
+    if opts and opts.justify then
+        tt.text:SetJustifyH(opts.justify)
+    else
+        tt.text:SetJustifyH("CENTER")
     end
     tt.text:SetText(text)
     tt:ClearAllPoints()
@@ -2532,117 +2537,29 @@ local function BuildColorSwatch(parentFrame, baseLevel, getValue, setValue, hasA
 
     -- Border state (populated lazily)
     local borderBuilt = false
-    local brdFrame, rainbowFrame, whiteFrame
-    local rainbowFadeAG, whiteFadeAG
-    local currentBorderIsWhite = false
 
     local function BuildBorder()
         if borderBuilt then return end
         borderBuilt = true
         local T = CS.BRD_THICK
 
-        brdFrame = CreateFrame("Frame", nil, swatch)
-        brdFrame:SetAllPoints()
-        brdFrame:SetFrameLevel(swatch:GetFrameLevel() + 1)
-
-        -- Rainbow border: uses PP for pixel-perfect at any panel scale
-        rainbowFrame = CreateFrame("Frame", nil, brdFrame)
-        rainbowFrame:SetAllPoints()
-        rainbowFrame:SetFrameLevel(brdFrame:GetFrameLevel())
-        local rbT = rainbowFrame:CreateTexture(nil, "BORDER")
-        rbT:SetTexture(MEDIA_PATH .. "icons\\rainbow-border-top.png")
-        rbT:SetPoint("BOTTOMLEFT", swatch, "TOPLEFT", -T, -T); rbT:SetPoint("BOTTOMRIGHT", swatch, "TOPRIGHT", T, -T); PP.Height(rbT, 2 * T)
-        local rbB = rainbowFrame:CreateTexture(nil, "BORDER")
-        rbB:SetTexture(MEDIA_PATH .. "icons\\rainbow-border-bottom.png")
-        rbB:SetPoint("TOPLEFT", swatch, "BOTTOMLEFT", -T, T); rbB:SetPoint("TOPRIGHT", swatch, "BOTTOMRIGHT", T, T); PP.Height(rbB, 2 * T)
-        local rbL = rainbowFrame:CreateTexture(nil, "BORDER")
-        rbL:SetTexture(MEDIA_PATH .. "icons\\rainbow-border-left.png")
-        rbL:SetPoint("TOPLEFT", rbT, "BOTTOMLEFT", 0, 0); rbL:SetPoint("BOTTOMLEFT", rbB, "TOPLEFT", 0, 0); PP.Width(rbL, 2 * T)
-        local rbR = rainbowFrame:CreateTexture(nil, "BORDER")
-        rbR:SetTexture(MEDIA_PATH .. "icons\\rainbow-border-right.png")
-        rbR:SetPoint("TOPRIGHT", rbT, "BOTTOMRIGHT", 0, 0); rbR:SetPoint("BOTTOMRIGHT", rbB, "TOPRIGHT", 0, 0); PP.Width(rbR, 2 * T)
-
-        -- Solid white border (shown for colorful/saturated colors)
-        whiteFrame = CreateFrame("Frame", nil, brdFrame)
-        whiteFrame:SetAllPoints()
-        whiteFrame:SetFrameLevel(brdFrame:GetFrameLevel())
-        local wt = whiteFrame:CreateTexture(nil, "BORDER")
-        wt:SetColorTexture(CS.SOLID_R, CS.SOLID_G, CS.SOLID_B, CS.SOLID_A)
+        local wt = swatch:CreateTexture(nil, "BORDER")
+        wt:SetColorTexture(1, 1, 1, 1)
         wt:SetPoint("BOTTOMLEFT", swatch, "TOPLEFT", -T, 0); wt:SetPoint("BOTTOMRIGHT", swatch, "TOPRIGHT", T, 0); PP.Height(wt, T)
-        local wb = whiteFrame:CreateTexture(nil, "BORDER")
-        wb:SetColorTexture(CS.SOLID_R, CS.SOLID_G, CS.SOLID_B, CS.SOLID_A)
+        local wb = swatch:CreateTexture(nil, "BORDER")
+        wb:SetColorTexture(1, 1, 1, 1)
         wb:SetPoint("TOPLEFT", swatch, "BOTTOMLEFT", -T, 0); wb:SetPoint("TOPRIGHT", swatch, "BOTTOMRIGHT", T, 0); PP.Height(wb, T)
-        local wl = whiteFrame:CreateTexture(nil, "BORDER")
-        wl:SetColorTexture(CS.SOLID_R, CS.SOLID_G, CS.SOLID_B, CS.SOLID_A)
+        local wl = swatch:CreateTexture(nil, "BORDER")
+        wl:SetColorTexture(1, 1, 1, 1)
         wl:SetPoint("TOPLEFT", swatch, "TOPLEFT", -T, 0); wl:SetPoint("BOTTOMLEFT", swatch, "BOTTOMLEFT", -T, 0); PP.Width(wl, T)
-        local wr = whiteFrame:CreateTexture(nil, "BORDER")
-        wr:SetColorTexture(CS.SOLID_R, CS.SOLID_G, CS.SOLID_B, CS.SOLID_A)
+        local wr = swatch:CreateTexture(nil, "BORDER")
+        wr:SetColorTexture(1, 1, 1, 1)
         wr:SetPoint("TOPRIGHT", swatch, "TOPRIGHT", T, 0); wr:SetPoint("BOTTOMRIGHT", swatch, "BOTTOMRIGHT", T, 0); PP.Width(wr, T)
-
-        -- Crossfade setup
-        whiteFrame:SetAlpha(0)
-        rainbowFrame:SetAlpha(1)
-
-        local function MakeFade(frm)
-            local ag = frm:CreateAnimationGroup()
-            local anim = ag:CreateAnimation("Alpha")
-            anim:SetDuration(0.25); anim:SetSmoothing("IN_OUT")
-            ag.anim = anim
-            ag:SetScript("OnFinished", function() frm:SetAlpha(ag.targetAlpha) end)
-            return ag
-        end
-        rainbowFadeAG = MakeFade(rainbowFrame)
-        whiteFadeAG   = MakeFade(whiteFrame)
-
-        -- Apply initial state without fade
-        local r, g, b = getValue()
-        r, g, b = r or 0, g or 0, b or 0
-        local maxC = math.max(r, g, b)
-        local minC = math.min(r, g, b)
-        local chroma = maxC - minC
-        local lightness = (maxC + minC) / 2
-        local sat = 0
-        if chroma > 0 and lightness > 0 and lightness < 1 then
-            sat = chroma / (1 - math.abs(2 * lightness - 1))
-        end
-        currentBorderIsWhite = sat > CS.SAT_THRESH and chroma >= CS.CHROMA_MIN
-        whiteFrame:SetAlpha(currentBorderIsWhite and 1 or 0)
-        rainbowFrame:SetAlpha(currentBorderIsWhite and 0 or 1)
     end
 
-    local function FadeTo(frm, ag, targetAlpha)
-        if frm:GetAlpha() == targetAlpha then return end
-        ag:Stop(); ag.targetAlpha = targetAlpha
-        ag.anim:SetFromAlpha(frm:GetAlpha()); ag.anim:SetToAlpha(targetAlpha)
-        ag:Play()
-    end
-
-    local function UpdateSwatch(skipFade)
+    local function UpdateSwatch()
         local r, g, b, a = getValue()
-        r, g, b = r or 0, g or 0, b or 0
-        sFill:SetColorTexture(r, g, b, a or 1)
-        -- Border update only if border has been built
-        if not borderBuilt then return end
-        local maxC = math.max(r, g, b)
-        local minC = math.min(r, g, b)
-        local chroma = maxC - minC
-        local lightness = (maxC + minC) / 2
-        local sat = 0
-        if chroma > 0 and lightness > 0 and lightness < 1 then
-            sat = chroma / (1 - math.abs(2 * lightness - 1))
-        end
-        local wantWhite = sat > CS.SAT_THRESH and chroma >= CS.CHROMA_MIN
-        if wantWhite ~= currentBorderIsWhite then
-            currentBorderIsWhite = wantWhite
-            if skipFade then
-                whiteFrame:SetAlpha(wantWhite and 1 or 0)
-                rainbowFrame:SetAlpha(wantWhite and 0 or 1)
-                rainbowFadeAG:Stop(); whiteFadeAG:Stop()
-            else
-                FadeTo(whiteFrame, whiteFadeAG, wantWhite and 1 or 0)
-                FadeTo(rainbowFrame, rainbowFadeAG, wantWhite and 0 or 1)
-            end
-        end
+        sFill:SetColorTexture(r or 0, g or 0, b or 0, a or 1)
     end
 
     -- Set initial fill color immediately (no border needed yet)

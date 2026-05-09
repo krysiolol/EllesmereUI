@@ -2,15 +2,16 @@
 ## Title: |cff0cd29fEllesmereUI|r Damage Meters
 ## Category: |cff0cd29fEllesmere|rUI
 ## Group: EllesmereUI
-## Notes: A modern, light damage meter reskin with improved functionality (Coming Soon)
+## Notes: A modern, light damage meter reskin with improved functionality
 ## Author: Ellesmere
-## Version: 7.5.5
+## Version: 7.5.6
 ## Dependencies: EllesmereUI
 ## SavedVariables: EllesmereUIDamageMetersDB
 ## IconTexture: Interface\AddOns\EllesmereUI\media\eg-logo.tga
 
 # Main Luas
 EllesmereUIDamageMeters.lua
+EllesmereUIDamageMeters_SpellHistory.lua
 
 # Options
 EUI_DamageMeters_Options.lua

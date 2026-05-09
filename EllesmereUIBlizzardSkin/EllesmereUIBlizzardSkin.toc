@@ -4,7 +4,7 @@
 ## Group: EllesmereUI
 ## Notes: A modern, light reskin of Blizzard UI elements with improved functionality
 ## Author: Ellesmere
-## Version: 7.5.5
+## Version: 7.5.6
 ## Dependencies: EllesmereUI
 ## SavedVariables: EllesmereUIBlizzardSkinDB, EllesmereUIDragonRidingDB
 ## IconTexture: Interface\AddOns\EllesmereUI\media\eg-logo.tga

@@ -526,6 +526,10 @@ local DEFAULTS = {
             showGCDBoundary   = false,
             gcdBoundaryR = 1.0, gcdBoundaryG = 0.82, gcdBoundaryB = 0.0, gcdBoundaryA = 0.95,
             coloredEmpowerStages = false,  -- Color empowered spells from red to green per stage
+            showTotalDuration = false,
+            latencyEnabled    = false,
+            latencyShowText   = false,
+            latencyR = 0.835, latencyG = 0.290, latencyB = 0.290, latencyA = 1.0,
         },
         general = {
             anchorX     = 0,
@@ -547,6 +551,9 @@ local secondaryFrame
 local secondaryBar  -- bar-style secondary (e.g. Devourer soul fragments, Elemental maelstrom)
 local secondaryBarTicks = {}  -- tick mark texture cache for bar-type secondary
 local castBarFrame
+local _latencySendTime      -- GetTime() at CURRENT_SPELL_CAST_CHANGED
+local _latencyEventActive   -- true when CURRENT_SPELL_CAST_CHANGED is registered
+local _erbEventFrame        -- file-scoped ref to the event frame (assigned in OnEnable)
 local isInCombat = false
 local currentAlpha = 1
 local targetAlpha = 1
@@ -902,6 +909,18 @@ end
 
 
 -------------------------------------------------------------------------------
+--  Per-spec bar enable check
+-------------------------------------------------------------------------------
+local function IsSpecDisabled(barCfg)
+    local disabledSpecs = barCfg and barCfg.disabledSpecs
+    if not disabledSpecs then return false end
+    local specIdx = GetSpecialization()
+    if not specIdx then return false end
+    local specID = specIdx and C_SpecializationInfo and C_SpecializationInfo.GetSpecializationInfo(specIdx)
+    return specID and disabledSpecs[specID] or false
+end
+
+-------------------------------------------------------------------------------
 --  Unlock mode: register with shared EllesmereUI unlock system
 -------------------------------------------------------------------------------
 local function RegisterUnlockElements()
@@ -983,6 +1002,7 @@ local function RegisterUnlockElements()
         elements[#elements + 1] = MK({
             key = "ERB_Health", label = "Health Bar", group = "Resource Bars", order = 500,
             getFrame = function() return healthBar end,
+            isHidden = function() local s = S(); return not s.enabled or IsSpecDisabled(s) end,
             getSize  = function()
                 local s = S(); return s.width, s.height
             end,
@@ -1001,6 +1021,7 @@ local function RegisterUnlockElements()
         elements[#elements + 1] = MK({
             key = "ERB_Power", label = "Power Bar", group = "Resource Bars", order = 501,
             getFrame = function() return primaryBar end,
+            isHidden = function() local s = S(); return s.enabled == false or IsSpecDisabled(s) end,
             getSize  = function()
                 local s = S(); return s.width or 214, s.height or 14
             end,
@@ -1435,7 +1456,7 @@ local function BuildBars()
         hpWidth = PP.SnapForES(hpWidth, _hpEs)
         hpHeight = PP.SnapForES(hpHeight, _hpEs)
     end
-    if hp.enabled then
+    do
         local hpOri = hp.orientation or g.orientation or "HORIZONTAL"
         if not healthBar then
             healthBar = CreateStatusBar(mainFrame, "ERB_HealthBar", hpWidth, hpHeight,
@@ -1443,6 +1464,19 @@ local function BuildBars()
             healthBar:SetFrameStrata("MEDIUM")
             healthBar:SetFrameLevel(10)
         end
+        if not hp.enabled then
+            -- Disabled: keep frame positioned at zero alpha for anchors
+            local ow, oh = OrientedSize(hpWidth, hpHeight, hpOri)
+            healthBar:SetSize(ow, oh)
+            healthBar:Show()
+            if hp.unlockPos and hp.unlockPos.point then
+                local rp = hp.unlockPos.relPoint or hp.unlockPos.point
+                local sx, sy = SnapXY(hp.unlockPos.x, hp.unlockPos.y, healthBar, hp.unlockPos)
+                healthBar:ClearAllPoints()
+                healthBar:SetPoint(hp.unlockPos.point, UIParent, rp, sx, sy)
+            end
+            EllesmereUI.SetElementVisibility(healthBar, false)
+        else
         local healthAnchorKey = NormalizeAnchorKey(hp.anchorTo)
         if healthAnchorKey ~= "none" then
             local ow, oh = OrientedSize(hpWidth, hpHeight, hpOri)
@@ -1517,8 +1551,10 @@ local function BuildBars()
         healthBar:Show()
         healthBar:SetAlpha(hp.barAlpha or 1)
         ApplyBarOrientation(healthBar, hpOri)
-    elseif healthBar then
-        EllesmereUI.SetElementVisibility(healthBar, false)
+        if IsSpecDisabled(hp) then
+            EllesmereUI.SetElementVisibility(healthBar, false)
+        end
+        end
     end
 
     -- Power bar (primary resource)
@@ -1557,7 +1593,7 @@ local function BuildBars()
     -- Always create the frame when enabled so anchored elements (CDM bars,
     -- cast bar, etc.) have a valid target. If the spec has no primary power
     -- the frame stays at zero alpha but retains its position.
-    if pp.enabled ~= false and not primaryBar then
+    if not primaryBar then
         primaryBar = CreateStatusBar(mainFrame, "ERB_PrimaryBar", ppWidth, ppHeight,
             pp.borderSize, pp.borderR, pp.borderG, pp.borderB, pp.borderA)
         primaryBar:SetFrameStrata("MEDIUM")
@@ -1651,6 +1687,9 @@ local function BuildBars()
             primaryBar:SetAlpha(pp.barAlpha or 1)
         end
         ApplyBarOrientation(primaryBar, ppOri)
+        if IsSpecDisabled(pp) then
+            EllesmereUI.SetElementVisibility(primaryBar, false)
+        end
     elseif primaryBar then
         -- Enabled but no resource for this spec: keep the frame positioned
         -- at zero alpha so anchored elements (CDM bars, etc.) have a target.
@@ -2816,7 +2855,7 @@ local function UpdateVisibility()
     -- Health bar visibility
     if healthBar then
         local hp = ERB.db.profile.health
-        if hp and hp.enabled and ShouldShowBar(hp) and not inVehicle then
+        if hp and hp.enabled and not IsSpecDisabled(hp) and ShouldShowBar(hp) and not inVehicle then
             healthBar:Show()
             EllesmereUI.SetElementVisibility(healthBar, true)
             healthBar:SetAlpha(hp.barAlpha or 1)
@@ -2832,7 +2871,7 @@ local function UpdateVisibility()
         -- Also check cachedPrimary: specs without a primary power (e.g. BM/MM Hunter)
         -- should hide the power bar even if enabled in settings
         local hidePower = sp and sp.hidePowerIfResource and cachedSecondary
-        if not hidePower and pp and pp.enabled ~= false and cachedPrimary and ShouldShowBar(pp) and not inVehicle then
+        if not hidePower and pp and pp.enabled ~= false and not IsSpecDisabled(pp) and cachedPrimary and ShouldShowBar(pp) and not inVehicle then
             primaryBar:Show()
             EllesmereUI.SetElementVisibility(primaryBar, true)
             primaryBar:SetAlpha(pp.barAlpha or 1)
@@ -2987,6 +3026,8 @@ local CAST_BAR_TEXTURES = {
     ["divide"]        = TEX_BASE .. "divide.tga",
     ["glass"]         = TEX_BASE .. "glass.tga",
     ["fade-right"]    = TEX_BASE .. "fade-right.tga",
+    ["thin-line-top"]    = TEX_BASE .. "thin-line-top.tga",
+    ["thin-line-bottom"] = TEX_BASE .. "thin-line-bottom.tga",
     ["fade"]          = TEX_BASE .. "fade.tga",
     ["gradient-lr"]   = TEX_BASE .. "gradient-lr.tga",
     ["gradient-rl"]   = TEX_BASE .. "gradient-rl.tga",
@@ -2997,7 +3038,7 @@ local CAST_BAR_TEXTURES = {
 }
 local CAST_BAR_TEXTURE_ORDER = {
     "none", "blizzard", "melli", "atrocity",
-    "fade", "fade-right",
+    "fade", "fade-right", "thin-line-top", "thin-line-bottom",
     "beautiful", "plating",
     "divide", "glass",
     "gradient-lr", "gradient-rl", "gradient-bt", "gradient-tb",
@@ -3013,6 +3054,8 @@ local CAST_BAR_TEXTURE_NAMES = {
     ["divide"]      = "Divide",
     ["glass"]       = "Glass",
     ["fade-right"]  = "Fade Right",
+    ["thin-line-top"]    = "Thin Line Top",
+    ["thin-line-bottom"] = "Thin Line Bottom",
     ["fade"]        = "Fade",
     ["gradient-lr"] = "Gradient Right",
     ["gradient-rl"] = "Gradient Left",
@@ -3039,6 +3082,8 @@ local BAR_TEXTURES = {
     ["divide"]        = BAR_TEX_BASE .. "divide.tga",
     ["glass"]         = BAR_TEX_BASE .. "glass.tga",
     ["fade-right"]    = BAR_TEX_BASE .. "fade-right.tga",
+    ["thin-line-top"]    = BAR_TEX_BASE .. "thin-line-top.tga",
+    ["thin-line-bottom"] = BAR_TEX_BASE .. "thin-line-bottom.tga",
     ["fade"]          = BAR_TEX_BASE .. "fade.tga",
     ["gradient-lr"]   = BAR_TEX_BASE .. "gradient-lr.tga",
     ["gradient-rl"]   = BAR_TEX_BASE .. "gradient-rl.tga",
@@ -3049,7 +3094,7 @@ local BAR_TEXTURES = {
 }
 local BAR_TEXTURE_ORDER = {
     "none", "melli", "atrocity",
-    "fade", "fade-right",
+    "fade", "fade-right", "thin-line-top", "thin-line-bottom",
     "beautiful", "plating",
     "divide", "glass",
     "gradient-lr", "gradient-rl", "gradient-bt", "gradient-tb",
@@ -3064,6 +3109,8 @@ local BAR_TEXTURE_NAMES = {
     ["divide"]      = "Divide",
     ["glass"]       = "Glass",
     ["fade-right"]  = "Fade Right",
+    ["thin-line-top"]    = "Thin Line Top",
+    ["thin-line-bottom"] = "Thin Line Bottom",
     ["fade"]        = "Fade",
     ["gradient-lr"] = "Gradient Right",
     ["gradient-rl"] = "Gradient Left",
@@ -3155,6 +3202,11 @@ BuildCastBar = function()
         spark:SetTexture(SPARK_TEX)
         spark:SetBlendMode("ADD")
         castBarFrame._spark = spark
+
+        -- Latency overlay (on clipFrame, above bar fill, below spark)
+        local latOverlay = clipFrame:CreateTexture(nil, "ARTWORK", nil, 7)
+        latOverlay:Hide()
+        castBarFrame._latencyOverlay = latOverlay
 
         -- Spell icon
         local iconFrame = CreateFrame("Frame", nil, castBarFrame)
@@ -3346,6 +3398,35 @@ end
         spark:Hide()
     end
 
+    -- Latency overlay: register/unregister event + style overlay based on setting
+    if cb.latencyEnabled and _erbEventFrame then
+        if not _latencyEventActive then
+            _erbEventFrame:RegisterEvent("CURRENT_SPELL_CAST_CHANGED")
+            _latencyEventActive = true
+        end
+        local lo = castBarFrame._latencyOverlay
+        local lR, lG, lB, lA = cb.latencyR or 0.835, cb.latencyG or 0.290, cb.latencyB or 0.290, cb.latencyA or 1
+        local texKey = cb.texture
+        if texKey and texKey ~= "none" and texKey ~= "blizzard" then
+            local texPath = EllesmereUI.ResolveTexturePath(CAST_BAR_TEXTURES, texKey, nil)
+            if texPath then
+                lo:SetTexture(texPath)
+                lo:SetVertexColor(lR, lG, lB, lA)
+            else
+                lo:SetColorTexture(lR, lG, lB, lA)
+            end
+        else
+            lo:SetColorTexture(lR, lG, lB, lA)
+        end
+    else
+        if _latencyEventActive and _erbEventFrame then
+            _erbEventFrame:UnregisterEvent("CURRENT_SPELL_CAST_CHANGED")
+            _latencyEventActive = false
+            _latencySendTime = nil
+        end
+        if castBarFrame._latencyOverlay then castBarFrame._latencyOverlay:Hide() end
+        castBarFrame._latencySuffix = nil
+    end
     -- Text width cap: use the bar's rendered width so width-matching
     -- and border insets are accounted for. Falls back to cb.width if
     -- the bar hasn't been laid out yet.
@@ -3519,6 +3600,11 @@ UpdateCastBar = function(dt)
     local cb = ERB.db.profile.castBar
     local showTimer = cb.showTimer
 
+    local latSuffix = _latencyEventActive and castBarFrame._latencySuffix
+    local totalDurMode = showTimer and cb.showTotalDuration
+    -- Cache the " / X.X" suffix once per cast (total duration is constant)
+    local totalSuffix = totalDurMode and castBarFrame._totalDurSuffix
+
     if castBarFrame._casting or castBarFrame._empowering then
         -- Safety: if cast/empower ran 1s past expected end, force stop.
         -- Catches missed EMPOWER_STOP events under network desync.
@@ -3555,7 +3641,14 @@ UpdateCastBar = function(dt)
         if showTimer then
             local remaining = castBarFrame._endTime - now
             if remaining > 0 then
-                castBarFrame._timerText:SetText(format("%.1f", remaining))
+                if totalDurMode then
+                    local elapsed = now - castBarFrame._startTime
+                    castBarFrame._timerText:SetText(format("%.1f", elapsed) .. (totalSuffix or ""))
+                elseif latSuffix then
+                    castBarFrame._timerText:SetText(format("%.1f", remaining) .. latSuffix)
+                else
+                    castBarFrame._timerText:SetText(format("%.1f", remaining))
+                end
             else
                 castBarFrame._timerText:SetText("")
             end
@@ -3572,7 +3665,14 @@ UpdateCastBar = function(dt)
         if showTimer then
             local remaining = castBarFrame._endTime - now
             if remaining > 0 then
-                castBarFrame._timerText:SetText(format("%.1f", remaining))
+                if totalDurMode then
+                    local elapsed = now - castBarFrame._startTime
+                    castBarFrame._timerText:SetText(format("%.1f", elapsed) .. (totalSuffix or ""))
+                elseif latSuffix then
+                    castBarFrame._timerText:SetText(format("%.1f", remaining) .. latSuffix)
+                else
+                    castBarFrame._timerText:SetText(format("%.1f", remaining))
+                end
             else
                 castBarFrame._timerText:SetText("")
             end
@@ -3591,6 +3691,60 @@ UpdateCastBar = function(dt)
     end
 end
 
+-------------------------------------------------------------------------------
+--  Latency overlay helper
+--  Called once per cast/channel start.  Measures actual per-spell latency
+--  (time between spell button press and server confirmation) and sizes the
+--  overlay as that fraction of the total cast duration.
+-------------------------------------------------------------------------------
+local function ShowLatencyOverlay(castType)
+    if not castBarFrame then return end
+    local overlay = castBarFrame._latencyOverlay
+    if not overlay then return end
+
+    local cb = ERB.db.profile.castBar
+    local sendTime = _latencySendTime
+    _latencySendTime = nil  -- consumed regardless of outcome
+
+    -- Bail early: feature off, no timestamp, or bad timing
+    if not cb.latencyEnabled or not sendTime then
+        overlay:Hide(); castBarFrame._latencySuffix = nil; return
+    end
+
+    local latencySec = min(GetTime() - sendTime, 0.4)  -- cap 400ms
+    local castDur = castBarFrame._endTime - castBarFrame._startTime
+    local barWidth = castBarFrame._bar:GetWidth()
+
+    if latencySec <= 0 or castDur <= 0 or latencySec >= castDur or barWidth <= 0 then
+        overlay:Hide(); castBarFrame._latencySuffix = nil; return
+    end
+
+    -- Build the suffix string once; reused every frame by UpdateCastBar
+    if cb.latencyShowText then
+        castBarFrame._latencySuffix = " (" .. floor(latencySec * 1000 + 0.5) .. "ms)"
+    else
+        castBarFrame._latencySuffix = nil
+    end
+
+    local clip = castBarFrame._barClip
+    overlay:ClearAllPoints()
+    if castType == "channel" then
+        overlay:SetPoint("TOPLEFT", clip, "TOPLEFT", 0, 0)
+        overlay:SetPoint("BOTTOMLEFT", clip, "BOTTOMLEFT", 0, 0)
+    else
+        overlay:SetPoint("TOPRIGHT", clip, "TOPRIGHT", 0, 0)
+        overlay:SetPoint("BOTTOMRIGHT", clip, "BOTTOMRIGHT", 0, 0)
+    end
+    overlay:SetWidth(barWidth * (latencySec / castDur))
+    overlay:Show()
+end
+
+local function HideLatencyOverlay()
+    if not castBarFrame then return end
+    if castBarFrame._latencyOverlay then castBarFrame._latencyOverlay:Hide() end
+    castBarFrame._latencySuffix = nil
+end
+
 OnCastStart = function()
     if not castBarFrame then return end
     local cb = ERB.db.profile.castBar
@@ -3606,6 +3760,7 @@ OnCastStart = function()
     castBarFrame._startTime = startTimeMS / 1000
     castBarFrame._endTime = endTimeMS / 1000
     castBarFrame._spellName = name
+    castBarFrame._totalDurSuffix = " / " .. format("%.1f", (endTimeMS - startTimeMS) / 1000)
     castBarFrame._nameText:SetText(name)
     castBarFrame._bar:SetValue(0)
 
@@ -3627,6 +3782,8 @@ OnCastStart = function()
             castBarFrame._iconFrame:Hide()
         end
     end
+
+    if _latencyEventActive then ShowLatencyOverlay("cast") end
 
     castBarFrame:Show()
     EllesmereUI.SetElementVisibility(castBarFrame, true)
@@ -3658,6 +3815,7 @@ OnChannelStart = function()
     castBarFrame._startTime = startTimeMS / 1000
     castBarFrame._endTime = endTimeMS / 1000
     castBarFrame._spellName = name
+    castBarFrame._totalDurSuffix = " / " .. format("%.1f", (endTimeMS - startTimeMS) / 1000)
     castBarFrame._nameText:SetText(name)
     castBarFrame._bar:SetValue(1)
 
@@ -3681,6 +3839,8 @@ OnChannelStart = function()
 
     -- Channel tick marks
     ShowChannelTicks(spellID)
+
+    if _latencyEventActive then ShowLatencyOverlay("channel") end
 
     castBarFrame:Show()
     EllesmereUI.SetElementVisibility(castBarFrame, true)
@@ -3788,6 +3948,7 @@ OnCastStop = function()
     end
     castBarFrame._numStages = 0
     HideChannelTicks()
+    if _latencyEventActive then HideLatencyOverlay() end
     EllesmereUI.SetElementVisibility(castBarFrame, false)
 end
 
@@ -3811,6 +3972,8 @@ OnEmpowerStart = function()
     castBarFrame._startTime = startTimeMS / 1000
     castBarFrame._endTime = endTimeMS / 1000
     castBarFrame._spellName = name
+    castBarFrame._totalDurSuffix = " / " .. format("%.1f", (endTimeMS - startTimeMS) / 1000)
+    if _latencyEventActive then HideLatencyOverlay() end
     castBarFrame._nameText:SetText(name)
     castBarFrame._bar:SetValue(0)
     HideChannelTicks()
@@ -4067,6 +4230,8 @@ local function OnEvent(self, event, ...)
             ERB:ApplyAll()
             RegisterUnlockElements()
         end)
+    elseif event == "CURRENT_SPELL_CAST_CHANGED" then
+        _latencySendTime = GetTime()
     elseif event == "UNIT_SPELLCAST_START" then
         local unit = ...
         if unit == "player" then OnCastStart() end
@@ -4144,6 +4309,7 @@ end
 
 function ERB:OnEnable()
     local eventFrame = CreateFrame("Frame")
+    _erbEventFrame = eventFrame
     eventFrame:RegisterUnitEvent("UNIT_HEALTH", "player")
     eventFrame:RegisterUnitEvent("UNIT_MAXHEALTH", "player")
     eventFrame:RegisterUnitEvent("UNIT_POWER_UPDATE", "player")

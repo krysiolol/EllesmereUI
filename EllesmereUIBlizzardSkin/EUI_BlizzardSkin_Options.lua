@@ -4,7 +4,6 @@
 local _, ns = ...
 local PAGE_CHARSHEET     = "Character Sheet"
 local PAGE_TOOLTIPS      = "Tooltips, Menus & Popups"
-local PAGE_GREATVAULT    = "Great Vault"
 local PAGE_DRAGONRIDING  = "Dragon Riding"
 
 local initFrame = CreateFrame("Frame")
@@ -185,6 +184,35 @@ initFrame:SetScript("OnEvent", function(self)
                       EllesmereUI:ShowConfirmPopup({
                           title       = "Reload Required",
                           message     = "Changing the pause menu reskin requires a UI reload.",
+                          confirmText = "Reload Now",
+                          cancelText  = "Later",
+                          onConfirm   = function() ReloadUI() end,
+                      })
+                  end
+              end },
+            { type="label", text="" }
+        );  y = y - h
+
+        _, h = W:Spacer(parent, y, 20); y = y - h
+        _, h = W:SectionHeader(parent, "THE GREAT VAULT", y);  y = y - h
+
+        _, h = W:DualRow(parent, y,
+            { type="toggle", text="Enable Great Vault Skin",
+              tooltip="Reskins the Great Vault window with custom tile backgrounds, progress colors, and completion states.",
+              getValue=function()
+                  if not EllesmereUIDB then return false end
+                  if EllesmereUIDB.reskinGreatVault == nil then
+                      return EllesmereUIDB.customTooltips ~= false
+                  end
+                  return EllesmereUIDB.reskinGreatVault
+              end,
+              setValue=function(v)
+                  if not EllesmereUIDB then EllesmereUIDB = {} end
+                  EllesmereUIDB.reskinGreatVault = v
+                  if EllesmereUI.ShowConfirmPopup then
+                      EllesmereUI:ShowConfirmPopup({
+                          title       = "Reload Required",
+                          message     = "Changing the Great Vault reskin requires a UI reload to fully swap between Blizzard and Ellesmere styles.",
                           confirmText = "Reload Now",
                           cancelText  = "Later",
                           onConfirm   = function() ReloadUI() end,
@@ -625,47 +653,6 @@ initFrame:SetScript("OnEvent", function(self)
     end
 
     ---------------------------------------------------------------------------
-    --  Great Vault page
-    ---------------------------------------------------------------------------
-    local function BuildGreatVaultPage(pageName, parent, yOffset)
-        local W = EllesmereUI.Widgets
-        local y = yOffset
-        local _, h
-
-        if EllesmereUI.ClearContentHeader then EllesmereUI:ClearContentHeader() end
-        parent._showRowDivider = true
-
-        _, h = W:Spacer(parent, y, 20); y = y - h
-        _, h = W:SectionHeader(parent, "GREAT VAULT", y); y = y - h
-
-        _, h = W:DualRow(parent, y,
-            { type="toggle", text="Enable Great Vault Skin",
-              tooltip="Reskins the Great Vault window, reward cards, selection states, and claim button to minimal style matching the EUI aesthetic.",
-              getValue=function()
-                  return not EllesmereUIDB or EllesmereUIDB.reskinGreatVault ~= false
-              end,
-              setValue=function(v)
-                  if not EllesmereUIDB then EllesmereUIDB = {} end
-                  EllesmereUIDB.reskinGreatVault = v
-                  if EllesmereUI.ShowConfirmPopup then
-                      EllesmereUI:ShowConfirmPopup({
-                          title       = "Reload Required",
-                          message     = "Changing the Great Vault reskin requires a UI reload to fully swap between Blizzard and Ellesmere styles.",
-                          confirmText = "Reload Now",
-                          cancelText  = "Later",
-                          onConfirm   = function() ReloadUI() end,
-                      })
-                  end
-              end },
-            { type="label", text="" }
-        ); y = y - h
-
-        _, h = W:Spacer(parent, y, 12); y = y - h
-
-        return math.abs(y)
-    end
-
-    ---------------------------------------------------------------------------
     --  Dragon Riding page
     ---------------------------------------------------------------------------
     local function EDR_DB()
@@ -688,6 +675,7 @@ initFrame:SetScript("OnEvent", function(self)
     local EDR_BAR_TEXTURE_ORDER = {
         "none", "melli", "atrocity",
         "fade", "fade-right",
+        "thin-line-top", "thin-line-bottom",
         "beautiful", "plating",
         "divide", "glass",
         "gradient-lr", "gradient-rl", "gradient-bt", "gradient-tb",
@@ -702,6 +690,8 @@ initFrame:SetScript("OnEvent", function(self)
         ["divide"]      = "Divide",
         ["glass"]       = "Glass",
         ["fade-right"]  = "Fade Right",
+        ["thin-line-top"]    = "Thin Line Top",
+        ["thin-line-bottom"] = "Thin Line Bottom",
         ["fade"]        = "Fade",
         ["gradient-lr"] = "Gradient Right",
         ["gradient-rl"] = "Gradient Left",
@@ -910,18 +900,15 @@ initFrame:SetScript("OnEvent", function(self)
 
     EllesmereUI:RegisterModule("EllesmereUIBlizzardSkin", {
         title       = "Blizz UI Enhanced",
-        description = "Themed Blizzard frames: Character Sheet, Great Vault, tooltips, menus, popups, Dragon Riding HUD.",
-        searchTerms = "blizzard skin character sheet great vault tooltip menu popup dragon riding skyriding weekly rewards",
-        pages       = { PAGE_CHARSHEET, PAGE_TOOLTIPS, PAGE_GREATVAULT, PAGE_DRAGONRIDING },
+        description = "Themed Blizzard frames: Character Sheet, tooltips, menus, popups, Dragon Riding HUD.",
+        searchTerms = "blizzard skin character sheet tooltip menu popup dragon riding skyriding",
+        pages       = { PAGE_CHARSHEET, PAGE_TOOLTIPS, PAGE_DRAGONRIDING },
         buildPage   = function(pageName, parent, yOffset)
             if pageName == PAGE_CHARSHEET then
                 return BuildCharacterSheetPage(pageName, parent, yOffset)
             end
             if pageName == PAGE_TOOLTIPS then
                 return BuildTooltipsPage(pageName, parent, yOffset)
-            end
-            if pageName == PAGE_GREATVAULT then
-                return BuildGreatVaultPage(pageName, parent, yOffset)
             end
             if pageName == PAGE_DRAGONRIDING then
                 return BuildDragonRidingPage(pageName, parent, yOffset)

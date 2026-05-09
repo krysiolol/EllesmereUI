@@ -1688,6 +1688,72 @@ initFrame:SetScript("OnEvent", function(self)
                 },
             })
             local cogBtn = MakeCogBtn(rgn, cogShow)
+
+            -- Inline spec-picker button for per-spec enable/disable
+            local specBtn = CreateFrame("Button", nil, rgn)
+            specBtn:SetSize(26, 26)
+            specBtn:SetPoint("RIGHT", cogBtn, "LEFT", -4, 0)
+            rgn._lastInline = specBtn
+            specBtn:SetFrameLevel(rgn:GetFrameLevel() + 5)
+            specBtn:SetAlpha(0.4)
+            local specTex = specBtn:CreateTexture(nil, "OVERLAY")
+            specTex:SetAllPoints()
+            specTex:SetDesaturated(true)
+            do
+                local _, classFile = UnitClass("player")
+                local SPRITE = "Interface\\AddOns\\EllesmereUI\\media\\icons\\class-full\\glyph.tga"
+                local COORDS = {
+                    WARRIOR={0,0.125,0,0.125}, MAGE={0.125,0.25,0,0.125}, ROGUE={0.25,0.375,0,0.125},
+                    DRUID={0.375,0.5,0,0.125}, EVOKER={0.5,0.625,0,0.125}, HUNTER={0,0.125,0.125,0.25},
+                    SHAMAN={0.125,0.25,0.125,0.25}, PRIEST={0.25,0.375,0.125,0.25}, WARLOCK={0.375,0.5,0.125,0.25},
+                    PALADIN={0,0.125,0.25,0.375}, DEATHKNIGHT={0.125,0.25,0.25,0.375},
+                    MONK={0.25,0.375,0.25,0.375}, DEMONHUNTER={0.375,0.5,0.25,0.375},
+                }
+                specTex:SetTexture(SPRITE)
+                local c = classFile and COORDS[classFile]
+                if c then specTex:SetTexCoord(c[1], c[2], c[3], c[4]) end
+            end
+            specBtn:SetScript("OnEnter", function(self)
+                self:SetAlpha(0.7)
+                EllesmereUI.ShowWidgetTooltip(self, "Enable/Disable per Spec")
+            end)
+            specBtn:SetScript("OnLeave", function(self) self:SetAlpha(0.4); EllesmereUI.HideWidgetTooltip() end)
+            specBtn:SetScript("OnClick", function()
+                local p = DB(); if not p then return end
+                if not p.primary.disabledSpecs then p.primary.disabledSpecs = {} end
+                local SPEC_DATA = EllesmereUI._SPEC_DATA
+                local preChecked = {}
+                local allSpecIDs = {}
+                if SPEC_DATA then
+                    for _, cls in ipairs(SPEC_DATA) do
+                        for _, spec in ipairs(cls.specs) do
+                            allSpecIDs[#allSpecIDs + 1] = spec.id
+                            if not p.primary.disabledSpecs[spec.id] then
+                                preChecked[spec.id] = true
+                            end
+                        end
+                    end
+                end
+                local dummyDB = { _erbPower = { _specs = {} } }
+                EllesmereUI:ShowSpecAssignPopup({
+                    db              = dummyDB,
+                    dbKey           = "_erbPower",
+                    presetKey       = "_specs",
+                    title           = "Power Bar",
+                    subtitle        = "Enable for these specs:",
+                    buttonText      = "Apply",
+                    preCheckedSpecs = preChecked,
+                    onConfirm       = function(assignments)
+                        p.primary.disabledSpecs = {}
+                        for _, specID in ipairs(allSpecIDs) do
+                            if not assignments[specID] then
+                                p.primary.disabledSpecs[specID] = true
+                            end
+                        end
+                        Refresh(); EllesmereUI:RefreshPage()
+                    end,
+                })
+            end)
             local cogDis = CreateFrame("Frame", nil, rgn)
             cogDis:SetAllPoints(cogBtn)
             cogDis:SetFrameLevel(cogBtn:GetFrameLevel() + 5)
@@ -2122,7 +2188,7 @@ initFrame:SetScript("OnEvent", function(self)
 
         local healthOff = function() local p = DB(); return p and not p.health.enabled end
 
-        -- Row 1: Show Health Bar | Orientation
+        -- Row 1: Show Health Bar (+ inline spec picker) | Orientation
         local healthEnableRow
         healthEnableRow, h = W:DualRow(parent, y,
             { type = "toggle", text = "Show Health Bar",
@@ -2146,6 +2212,74 @@ initFrame:SetScript("OnEvent", function(self)
                   p.health.orientation = v; Refresh()
               end }
         );  y = y - h
+        -- Inline spec-picker button on Show Health Bar
+        do
+            local rgn = healthEnableRow._leftRegion
+            local specBtn = CreateFrame("Button", nil, rgn)
+            specBtn:SetSize(26, 26)
+            specBtn:SetPoint("RIGHT", rgn._lastInline or rgn._control, "LEFT", -8, 0)
+            rgn._lastInline = specBtn
+            specBtn:SetFrameLevel(rgn:GetFrameLevel() + 5)
+            specBtn:SetAlpha(0.4)
+            local specTex = specBtn:CreateTexture(nil, "OVERLAY")
+            specTex:SetAllPoints()
+            specTex:SetDesaturated(true)
+            do
+                local _, classFile = UnitClass("player")
+                local SPRITE = "Interface\\AddOns\\EllesmereUI\\media\\icons\\class-full\\glyph.tga"
+                local COORDS = {
+                    WARRIOR={0,0.125,0,0.125}, MAGE={0.125,0.25,0,0.125}, ROGUE={0.25,0.375,0,0.125},
+                    DRUID={0.375,0.5,0,0.125}, EVOKER={0.5,0.625,0,0.125}, HUNTER={0,0.125,0.125,0.25},
+                    SHAMAN={0.125,0.25,0.125,0.25}, PRIEST={0.25,0.375,0.125,0.25}, WARLOCK={0.375,0.5,0.125,0.25},
+                    PALADIN={0,0.125,0.25,0.375}, DEATHKNIGHT={0.125,0.25,0.25,0.375},
+                    MONK={0.25,0.375,0.25,0.375}, DEMONHUNTER={0.375,0.5,0.25,0.375},
+                }
+                specTex:SetTexture(SPRITE)
+                local c = classFile and COORDS[classFile]
+                if c then specTex:SetTexCoord(c[1], c[2], c[3], c[4]) end
+            end
+            specBtn:SetScript("OnEnter", function(self)
+                self:SetAlpha(0.7)
+                EllesmereUI.ShowWidgetTooltip(self, "Enable/Disable per Spec")
+            end)
+            specBtn:SetScript("OnLeave", function(self) self:SetAlpha(0.4); EllesmereUI.HideWidgetTooltip() end)
+            specBtn:SetScript("OnClick", function()
+                local p = DB(); if not p then return end
+                if not p.health.disabledSpecs then p.health.disabledSpecs = {} end
+                local SPEC_DATA = EllesmereUI._SPEC_DATA
+                local preChecked = {}
+                local allSpecIDs = {}
+                if SPEC_DATA then
+                    for _, cls in ipairs(SPEC_DATA) do
+                        for _, spec in ipairs(cls.specs) do
+                            allSpecIDs[#allSpecIDs + 1] = spec.id
+                            if not p.health.disabledSpecs[spec.id] then
+                                preChecked[spec.id] = true
+                            end
+                        end
+                    end
+                end
+                local dummyDB = { _erbHealth = { _specs = {} } }
+                EllesmereUI:ShowSpecAssignPopup({
+                    db              = dummyDB,
+                    dbKey           = "_erbHealth",
+                    presetKey       = "_specs",
+                    title           = "Health Bar",
+                    subtitle        = "Enable for these specs:",
+                    buttonText      = "Apply",
+                    preCheckedSpecs = preChecked,
+                    onConfirm       = function(assignments)
+                        p.health.disabledSpecs = {}
+                        for _, specID in ipairs(allSpecIDs) do
+                            if not assignments[specID] then
+                                p.health.disabledSpecs[specID] = true
+                            end
+                        end
+                        RebuildHealth(); EllesmereUI:RefreshPage()
+                    end,
+                })
+            end)
+        end
 
         -- Row 2: (Sync) Height | (Sync) Width
         local healthSizeRow
@@ -3361,6 +3495,23 @@ initFrame:SetScript("OnEvent", function(self)
             UpdateCogDisTimer()
         end
 
+        -- Row 6: Show Total Duration | empty
+        _, h = W:DualRow(parent, y,
+            { type = "toggle", text = "Show Total Duration",
+              tooltip = "Shows elapsed / total duration (e.g. 0.4 / 2.0) instead of counting down from the total.",
+              disabled = function()
+                  local p = DB()
+                  return castOff() or not (p and p.castBar.showTimer)
+              end,
+              disabledTooltip = "Enable Duration Text",
+              getValue = function() local p = DB(); return p and p.castBar.showTotalDuration end,
+              setValue = function(v)
+                  local p = DB(); if not p then return end
+                  p.castBar.showTotalDuration = v; RefreshCast()
+              end },
+            { type = "label", text = "" }
+        );  y = y - h
+
         -- ── MARKS section ───────────────────────────────────────────
         _, h = W:SectionHeader(parent, "TICK MARKERS", y);  y = y - h
 
@@ -3476,6 +3627,54 @@ initFrame:SetScript("OnEvent", function(self)
             end,
             function() return marksOff() or not (DB() and DB().castBar.showLastTick) end,
             "Enable Last Tick"
+        )
+
+        -- ── LATENCY section ─────────────────────────────────────────
+        _, h = W:SectionHeader(parent, "LATENCY", y);  y = y - h
+
+        local latOff = function()
+            local p = DB()
+            return castOff() or not (p and p.castBar.latencyEnabled)
+        end
+
+        -- Latency Row 1: Enable Latency Overlay (+ color) | Show Latency Text
+        local latRow1
+        latRow1, h = W:DualRow(parent, y,
+            { type = "toggle", text = "Enable Latency Overlay",
+              tooltip = "Shows a colored overlay at the end of the cast bar representing your network latency for each spell. Helps you time spell queuing.",
+              disabled = castOff,
+              disabledTooltip = "Enable Player Cast Bar",
+              getValue = function() local p = DB(); return p and p.castBar.latencyEnabled end,
+              setValue = function(v)
+                  local p = DB(); if not p then return end
+                  p.castBar.latencyEnabled = v; RefreshCast()
+                  EllesmereUI:RefreshPage()
+              end },
+            { type = "toggle", text = "Show Latency Text",
+              tooltip = "Appends your latency in milliseconds to the cast timer, e.g. 1.8 (42ms).",
+              disabled = latOff,
+              disabledTooltip = "Enable Latency Overlay",
+              getValue = function() local p = DB(); return p and p.castBar.latencyShowText end,
+              setValue = function(v)
+                  local p = DB(); if not p then return end
+                  p.castBar.latencyShowText = v; RefreshCast()
+              end }
+        );  y = y - h
+
+        AttachInlineSwatch(latRow1._leftRegion,
+            function()
+                local p = DB(); if not p then return 0.835, 0.290, 0.290, 1 end
+                return p.castBar.latencyR or 0.835, p.castBar.latencyG or 0.290,
+                       p.castBar.latencyB or 0.290, p.castBar.latencyA or 1
+            end,
+            function(r, g, b, a)
+                local p = DB(); if not p then return end
+                p.castBar.latencyR = r; p.castBar.latencyG = g
+                p.castBar.latencyB = b; p.castBar.latencyA = a
+                RefreshCast()
+            end,
+            latOff,
+            "Enable Latency Overlay"
         )
 
         -- Wire up click mappings for cast bar preview hit overlays

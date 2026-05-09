@@ -2536,51 +2536,10 @@ LayoutCDMBar = function(barKey)
     -- toggle IsShown independently -- we position everything we own.
     local visibleIcons = icons
     local count = #visibleIcons
-    -- For non-dynamic bars (cd/utility), use assignedSpells count as minimum
-    -- size so the bar never shrinks during transitional states.
-    -- Skip trinket slots whose trinket isn't on-use (they don't render).
-    local isDynamic = (barData.barType == "buffs" or barKey == "buffs" or barData.barType == "custom_buff")
+    -- Bar sizing uses the actual icon count as the sole authority.
+    -- The count==0 early return below preserves the last known size
+    -- during brief transitional states (spec swap, pool churn).
     local sizeCount = count
-    if not isDynamic then
-        local sd = ns.GetBarSpellData(barKey)
-        if sd and sd.assignedSpells then
-            local visibleAssigned = 0
-            local isRacialSet = ns._myRacialsSet
-            local customSet = sd.customSpellIDs
-            local IsKnown = ns.IsSpellKnownInCDM
-            for _, sid in ipairs(sd.assignedSpells) do
-                if sid == -13 or sid == -14 then
-                    local slot = -sid
-                    local tf = ns._trinketFrames and ns._trinketFrames[slot]
-                    local hasItem = GetInventoryItemID("player", slot) ~= nil
-                    local showPassive = barData and barData.showPassiveTrinkets
-                    if hasItem and tf and (tf._trinketIsOnUse or showPassive) then visibleAssigned = visibleAssigned + 1 end
-                elseif sid and sid <= -100 then
-                    -- Item preset: always counted (frame exists if icon resolved)
-                    visibleAssigned = visibleAssigned + 1
-                elseif sid and sid > 0 then
-                    -- Positive spell: this counter reserves a minimum slot
-                    -- count so the bar doesn't shrink while Phase 3 custom
-                    -- injection runs. Only count spells that Phase 3 will
-                    -- actually render as a custom frame: racials and user
-                    -- customs that are NOT already in Blizzard's CDM
-                    -- category. CDM-known spells are handled by Blizzard's
-                    -- native frame (counted via `count` if on this bar, or
-                    -- not counted at all if on another bar). Unknown spells
-                    -- are skipped entirely.
-                    local isKnownInCDM = IsKnown and IsKnown(sid)
-                    if not isKnownInCDM then
-                        local isRacial = isRacialSet and isRacialSet[sid]
-                        local isCustom = customSet and customSet[sid]
-                        if isRacial or isCustom then
-                            visibleAssigned = visibleAssigned + 1
-                        end
-                    end
-                end
-            end
-            sizeCount = math.max(count, visibleAssigned)
-        end
-    end
     if count == 0 then
         local curW = frame:GetWidth() or 0
         local curH = frame:GetHeight() or 0

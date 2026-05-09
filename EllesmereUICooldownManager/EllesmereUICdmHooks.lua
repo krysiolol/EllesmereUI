@@ -1432,8 +1432,7 @@ local function CollectAndReanchor()
                         -- hides frames for buffs the player doesn't
                         -- currently have, but we still want them visible
                         -- while configuring.
-                        local euiOpen = EllesmereUI and EllesmereUI._mainFrame and EllesmereUI._mainFrame:IsShown()
-                        if frame:IsShown() or euiOpen then
+                        if frame:IsShown() or ns._cdmBarsPageOpen then
                             local targetBar, displaySID, baseSID = CategorizeFrame(frame, defaultBarKey)
                             -- When panel is open, hidden frames are included for
                             -- preview. But only allow them on the default buff
@@ -2266,7 +2265,7 @@ local function UpdateCustomBuffBars()
     if not p or not p.cdmBars or not p.cdmBars.bars then return end
     local LayoutCDMBar = ns.LayoutCDMBar
     local RefreshCDMIconAppearance = ns.RefreshCDMIconAppearance
-    local euiOpen = EllesmereUI._mainFrame and EllesmereUI._mainFrame:IsShown()
+    local cdmPageOpen = ns._cdmBarsPageOpen or false
     local now = GetTime()
 
     for _, barData in ipairs(p.cdmBars.bars) do
@@ -2298,7 +2297,7 @@ local function UpdateCustomBuffBars()
                             local isActive = timer and duration > 0
                                 and (now - timer.start) < timer.duration
 
-                            if isActive or euiOpen then
+                            if isActive or cdmPageOpen then
                                 local fkey = barKey .. ":custombuff:" .. sid
                                 local f = _presetFrames[fkey]
                                 if not f then

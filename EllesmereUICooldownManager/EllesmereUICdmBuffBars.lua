@@ -48,6 +48,8 @@ local TBB_TEXTURES = {
     ["divide"]        = TBB_TEX_BASE .. "divide.tga",
     ["glass"]         = TBB_TEX_BASE .. "glass.tga",
     ["fade-right"]    = TBB_TEX_BASE .. "fade-right.tga",
+    ["thin-line-top"]    = TBB_TEX_BASE .. "thin-line-top.tga",
+    ["thin-line-bottom"] = TBB_TEX_BASE .. "thin-line-bottom.tga",
     ["fade"]          = TBB_TEX_BASE .. "fade.tga",
     ["gradient-lr"]   = TBB_TEX_BASE .. "gradient-lr.tga",
     ["gradient-rl"]   = TBB_TEX_BASE .. "gradient-rl.tga",
@@ -59,6 +61,7 @@ local TBB_TEXTURES = {
 local TBB_TEXTURE_ORDER = {
     "none", "melli", "atrocity",
     "fade", "fade-right",
+    "thin-line-top", "thin-line-bottom",
     "beautiful", "plating",
     "divide", "glass",
     "gradient-lr", "gradient-rl", "gradient-bt", "gradient-tb",
@@ -73,6 +76,8 @@ local TBB_TEXTURE_NAMES = {
     ["divide"]      = "Divide",
     ["glass"]       = "Glass",
     ["fade-right"]  = "Fade Right",
+    ["thin-line-top"]    = "Thin Line Top",
+    ["thin-line-bottom"] = "Thin Line Bottom",
     ["fade"]        = "Fade",
     ["gradient-lr"] = "Gradient Right",
     ["gradient-rl"] = "Gradient Left",
@@ -1154,10 +1159,11 @@ function ns.UpdateTrackedBuffBarTimers()
     local bars = tbb.bars
     if not bars then if MD then MD("TBBTick") end return end
 
-    -- Self-heal placeholder mode when user navigates away
+    -- Self-heal placeholder mode when user navigates away from CDM Tracking Bars
     if ns._tbbPlaceholderMode then
+        local am = EllesmereUI and EllesmereUI.GetActiveModule and EllesmereUI:GetActiveModule()
         local ap = EllesmereUI and EllesmereUI.GetActivePage and EllesmereUI:GetActivePage()
-        if ap ~= "Tracking Bars" then
+        if am ~= "EllesmereUICooldownManager" or ap ~= "Tracking Bars" then
             ns._tbbPlaceholderMode = false
             if ns.HideTBBPlaceholders then ns.HideTBBPlaceholders() end
         end

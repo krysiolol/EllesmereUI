@@ -1937,6 +1937,23 @@ migrationFrame:SetScript("OnEvent", function(self, event, addonName)
     -- each body and stamping per-scope flags on success.
     EllesmereUI.RunRegisteredMigrations()
 
+    -- DM: fontSize was split into leftFontSize + rightFontSize.
+    -- DeepMergeDefaults fills new keys with default 11 before the runtime
+    -- fallback chain (c.leftFontSize or c.fontSize or 11) can reach the old
+    -- value, so existing users who changed fontSize lose their setting.
+    -- Copy the old value forward before defaults merge overwrites it.
+    if EllesmereUIDB and EllesmereUIDB.profiles then
+        for _, profData in pairs(EllesmereUIDB.profiles) do
+            local dm = profData.addons
+                and profData.addons.EllesmereUIDamageMeters
+                and profData.addons.EllesmereUIDamageMeters.dm
+            if dm and dm.fontSize and dm.fontSize ~= 11 then
+                if dm.leftFontSize == nil then dm.leftFontSize = dm.fontSize end
+                if dm.rightFontSize == nil then dm.rightFontSize = dm.fontSize end
+            end
+        end
+    end
+
     -- Unconditional ghost buff purge: catches imported profiles that
     -- bypass migration flags. Cheap scan, runs once at login.
     if EllesmereUIDB and EllesmereUIDB.profiles then

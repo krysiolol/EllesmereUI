@@ -12,7 +12,6 @@ local EUI = EllesmereUI
 local BAR_POOL_SIZE     = 40
 local RANK_STRINGS      = {}
 for i = 1, 40 do RANK_STRINGS[i] = i .. "." end
-local HEADER_H          = 20
 local MIN_W, MIN_H      = 150, 80
 local TICK_COMBAT       = 0.5
 local PEAK_BUDGET       = 1.5
@@ -23,9 +22,50 @@ local ICON_HOVER_ALPHA  = 0.9
 local RESIZE_ICON       = "Interface\\AddOns\\EllesmereUI\\media\\icons\\resize_element.png"
 local MAX_WINDOWS       = 5
 
--- Profiler stubs (call sites remain, zero cost)
-local function ProfBegin() return 0 end
-local function ProfEnd() end
+-- Profiler: zero cost when off, /dmprof to toggle
+local ProfBegin, ProfEnd
+do
+    local _profData, _profActive = {}, false
+    local dps = debugprofilestop
+    ProfBegin = function(label)
+        if not _profActive then return 0 end
+        return dps()
+    end
+    ProfEnd = function(label, t0)
+        if not _profActive then return end
+        local elapsed = dps() - t0
+        local d = _profData[label]
+        if not d then d = { n = 0, total = 0, peak = 0 }; _profData[label] = d end
+        d.n = d.n + 1
+        d.total = d.total + elapsed
+        if elapsed > d.peak then d.peak = elapsed end
+    end
+    SLASH_DMPROF1 = "/dmprof"
+    SlashCmdList["DMPROF"] = function(msg)
+        if msg == "reset" then
+            wipe(_profData)
+            print("|cff00ccffDM Prof:|r data cleared")
+            return
+        end
+        _profActive = not _profActive
+        if _profActive then
+            wipe(_profData)
+            print("|cff00ccffDM Prof:|r ON -- type /dmprof again to stop and print report")
+        else
+            local sorted = {}
+            for label, d in pairs(_profData) do
+                sorted[#sorted + 1] = { label = label, n = d.n, total = d.total, peak = d.peak }
+            end
+            table.sort(sorted, function(a, b) return a.peak > b.peak end)
+            print("|cff00ccffDM Prof Report:|r")
+            print(string.format("  %-30s %8s %10s %10s", "Label", "Calls", "Avg(ms)", "Peak(ms)"))
+            for _, e in ipairs(sorted) do
+                local avg = e.n > 0 and (e.total / e.n) or 0
+                print(string.format("  %-30s %8d %10.3f %10.3f", e.label, e.n, avg, e.peak))
+            end
+        end
+    end
+end
 
 local DM_TYPE_NAMES = {
     [Enum.DamageMeterType.DamageDone]           = "Damage Done",
@@ -91,10 +131,17 @@ local DM_DEFAULTS = {
             iconColorUseAccent = false,
             iconColor       = { r = 1, g = 1, b = 1 },
             showClassColor  = true,
-            showPinnedSelf  = true,
+            showPinnedSelf  = false,
             showHoverTooltip = true,
             barColorUseAccent = true,
             barColor        = { r = 0.35, g = 0.55, b = 0.8 },
+            barFillAlpha    = 1,
+            leftFontSize    = 11,
+            leftTextUseClassColor = false,
+            leftTextColor   = { r = 1, g = 1, b = 1 },
+            rightFontSize   = 11,
+            rightTextUseClassColor = false,
+            rightTextColor  = { r = 1, g = 1, b = 1 },
             bgR = 0, bgG = 0, bgB = 0, bgAlpha = 0.75,
             standaloneTimer       = false,
             standaloneTimerSize   = 26,
@@ -104,6 +151,11 @@ local DM_DEFAULTS = {
             refreshRate = 0.5,
             hdrBgColor      = { r = 0x1B/255, g = 0x1B/255, b = 0x1B/255 },
             hdrBgAlpha      = 1,
+            hdrHeight       = 22,
+            hdrFontSize     = 11,
+            hdrTextOffX     = 0,
+            hdrTextOffY     = 0,
+            hdrIconSize     = 22,
             hdrTextUseAccent = true,
             hdrTextColor    = { r = 1, g = 1, b = 1 },
             -- Per-window settings
@@ -130,6 +182,7 @@ ns.EDM.DB = function()
 end
 
 local function DB() return ns.EDM.DB() end
+local function GetHeaderH() local c = DB(); return c.hdrHeight or 22 end
 
 -- Per-window DB accessor
 local function WinDB(idx)
@@ -164,6 +217,8 @@ end
 local _inCombat = false
 local _playerGUID
 local _windows = {}  -- array of active window tables
+ns._windows = _windows
+ns._DM_TYPE_NAMES = DM_TYPE_NAMES
 local _combatStartTime = 0   -- GetTime() at combat start
 local _combatEndTime = 0     -- GetTime() at combat end (frozen)
 local _needsFinalRefresh = false
@@ -179,29 +234,59 @@ local function GetCombatElapsed()
     return 0
 end
 
+local _raidUnits, _partyUnits = {}, {}
+for i = 1, 40 do _raidUnits[i] = "raid" .. i end
+for i = 1, 4 do _partyUnits[i] = "party" .. i end
+
 local function IsGroupInCombat()
     if UnitAffectingCombat("player") then return true end
     if IsInRaid() then
-        for i = 1, GetNumGroupMembers() do
-            if UnitAffectingCombat("raid" .. i) then return true end
+        local n = GetNumGroupMembers()
+        for i = 1, n do
+            if UnitAffectingCombat(_raidUnits[i]) then return true end
         end
     elseif IsInGroup() then
-        for i = 1, GetNumGroupMembers() do
-            if UnitAffectingCombat("party" .. i) then return true end
+        local n = GetNumGroupMembers() - 1  -- party units exclude player
+        for i = 1, n do
+            if UnitAffectingCombat(_partyUnits[i]) then return true end
         end
     end
     return false
 end
 
 -- Keystone start: wipe data so Overall = this dungeon run
+-- Keystone end: auto-swap windows from Current to Overall (if enabled)
 local instanceFrame = CreateFrame("Frame")
 instanceFrame:RegisterEvent("CHALLENGE_MODE_START")
-instanceFrame:SetScript("OnEvent", function()
-    if C_DamageMeter and C_DamageMeter.ResetAllCombatSessions then
-        C_DamageMeter.ResetAllCombatSessions()
+instanceFrame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
+instanceFrame:SetScript("OnEvent", function(_, event)
+    if event == "CHALLENGE_MODE_START" then
+        if C_DamageMeter and C_DamageMeter.ResetAllCombatSessions then
+            C_DamageMeter.ResetAllCombatSessions()
+        end
+        _combatStartTime = 0; _combatEndTime = 0
+        -- Auto-swap: Overall -> Current on key start
+        for _, w in ipairs(_windows) do
+            local wdb2 = WinDB(w.idx)
+            if wdb2.autoSwapMythic and w.curSession == Enum.DamageMeterSessionType.Overall then
+                w.curSession = Enum.DamageMeterSessionType.Current
+                wdb2.curSession = Enum.DamageMeterSessionType.Current
+                w.curSessionID = nil
+            end
+            w.Refresh()
+        end
+    elseif event == "CHALLENGE_MODE_COMPLETED" then
+        -- Auto-swap: Current -> Overall on key completion
+        for _, w in ipairs(_windows) do
+            local wdb2 = WinDB(w.idx)
+            if wdb2.autoSwapMythic and not w.curSessionID and w.curSession == Enum.DamageMeterSessionType.Current then
+                w.curSession = Enum.DamageMeterSessionType.Overall
+                wdb2.curSession = Enum.DamageMeterSessionType.Overall
+                w.curSessionID = nil
+                w.Refresh()
+            end
+        end
     end
-    _combatStartTime = 0; _combatEndTime = 0
-    for _, w in ipairs(_windows) do w.Refresh() end
 end)
 
 -------------------------------------------------------------------------------
@@ -268,6 +353,8 @@ local DM_BAR_TEXTURES = {
     ["divide"]        = DM_TEX_BASE .. "divide.tga",
     ["glass"]         = DM_TEX_BASE .. "glass.tga",
     ["fade-right"]    = DM_TEX_BASE .. "fade-right.tga",
+    ["thin-line-top"]    = DM_TEX_BASE .. "thin-line-top.tga",
+    ["thin-line-bottom"] = DM_TEX_BASE .. "thin-line-bottom.tga",
     ["fade"]          = DM_TEX_BASE .. "fade.tga",
     ["gradient-lr"]   = DM_TEX_BASE .. "gradient-lr.tga",
     ["gradient-rl"]   = DM_TEX_BASE .. "gradient-rl.tga",
@@ -278,7 +365,7 @@ local DM_BAR_TEXTURES = {
 }
 local DM_BAR_TEXTURE_ORDER = {
     "none", "melli", "atrocity",
-    "fade", "fade-right",
+    "fade", "fade-right", "thin-line-top", "thin-line-bottom",
     "beautiful", "plating",
     "divide", "glass",
     "gradient-lr", "gradient-rl", "gradient-bt", "gradient-tb",
@@ -293,6 +380,8 @@ local DM_BAR_TEXTURE_NAMES = {
     ["divide"]      = "Divide",
     ["glass"]       = "Glass",
     ["fade-right"]  = "Fade Right",
+    ["thin-line-top"]    = "Thin Line Top",
+    ["thin-line-bottom"] = "Thin Line Bottom",
     ["fade"]        = "Fade",
     ["gradient-lr"] = "Gradient Right",
     ["gradient-rl"] = "Gradient Left",
@@ -318,7 +407,77 @@ end
 local function GetBarTexturePath()
     local cfg = DB()
     local key = cfg and cfg.barTexture or "none"
-    return EUI.ResolveTexturePath(DM_BAR_TEXTURES, key, BAR_TEX)
+    return EUI.ResolveTexturePath(DM_BAR_TEXTURES, key, BAR_TEX), key
+end
+
+-- Thin-line overlay: 3 physical pixels at top or bottom of a StatusBar.
+-- Instead of modifying every SetStatusBarColor/SetValue call site, we
+-- hook the bar.fill so color/value operations transparently forward to
+-- the overlay when thin-line mode is active.
+local THIN_LINE_KEYS = { ["thin-line-top"] = "TOP", ["thin-line-bottom"] = "BOTTOM" }
+local THIN_LINE_PX = 1
+
+local function SetupThinLine(fill, edge)
+    if not fill._thinLine then
+        local tl = CreateFrame("StatusBar", nil, fill)
+        tl:SetStatusBarTexture(BAR_TEX)
+        fill._thinLine = tl
+        -- Hook SetStatusBarColor to forward to overlay
+        local origSSBC = fill.SetStatusBarColor
+        fill.SetStatusBarColor = function(self, r, g, b, a)
+            if self._thinLine and self._thinLineActive then
+                self._thinLine:SetStatusBarColor(r, g, b, a)
+                origSSBC(self, 0, 0, 0, 0)
+            else
+                origSSBC(self, r, g, b, a)
+            end
+        end
+        -- Hook SetMinMaxValues + SetValue to sync overlay
+        local origSMMV = fill.SetMinMaxValues
+        fill.SetMinMaxValues = function(self, lo, hi)
+            origSMMV(self, lo, hi)
+            if self._thinLine and self._thinLineActive then
+                self._thinLine:SetMinMaxValues(lo, hi)
+            end
+        end
+        local origSV = fill.SetValue
+        fill.SetValue = function(self, v)
+            origSV(self, v)
+            if self._thinLine and self._thinLineActive then
+                self._thinLine:SetValue(v)
+            end
+        end
+    end
+    local tl = fill._thinLine
+    local PP = EUI and EUI.PP
+    local px = THIN_LINE_PX * ((PP and PP.mult) or 1)
+    tl:ClearAllPoints()
+    if edge == "TOP" then
+        tl:SetPoint("TOPLEFT", fill, "TOPLEFT", 0, 0)
+        tl:SetPoint("TOPRIGHT", fill, "TOPRIGHT", 0, 0)
+    else
+        tl:SetPoint("BOTTOMLEFT", fill, "BOTTOMLEFT", 0, 0)
+        tl:SetPoint("BOTTOMRIGHT", fill, "BOTTOMRIGHT", 0, 0)
+    end
+    tl:SetHeight(px)
+    tl:Show()
+    fill._thinLineActive = true
+end
+
+local function ClearThinLine(fill)
+    fill._thinLineActive = false
+    if fill._thinLine then fill._thinLine:Hide() end
+end
+
+local function ApplyBarTexture(fill, texPath, texKey)
+    local edge = THIN_LINE_KEYS[texKey]
+    if edge then
+        fill:SetStatusBarTexture(BAR_TEX)
+        SetupThinLine(fill, edge)
+    else
+        fill:SetStatusBarTexture(texPath)
+        ClearThinLine(fill)
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -372,10 +531,7 @@ end
 
 local function StripRealm(name)
     if not name then return "Unknown" end
-    if Ambiguate then
-        local ok, result = pcall(Ambiguate, name, "short")
-        if ok and result then return result end
-    end
+    if Ambiguate then return Ambiguate(name, "short") or name end
     return name
 end
 
@@ -432,12 +588,12 @@ local function ResolveIcon(src, iconTex, barH)
     local style = cfg.iconStyle or "spec"
     if style == "none" then iconTex:Hide(); return 0 end
 
-    local okC, classFile = pcall(function() return src.classFilename end)
-    if not okC or not classFile or classFile == "" then iconTex:Hide(); return 0 end
+    local classFile = src.classFilename
+    if not classFile or classFile == "" then iconTex:Hide(); return 0 end
 
     if style == "spec" then
-        local okS, specIcon = pcall(function() return src.specIconID end)
-        if okS and specIcon and type(specIcon) == "number" and specIcon ~= 0 then
+        local specIcon = src.specIconID
+        if specIcon and type(specIcon) == "number" and specIcon ~= 0 then
             iconTex:SetTexture(specIcon)
             iconTex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
             iconTex:SetSize(barH, barH)
@@ -590,7 +746,7 @@ local function PopulatePreview(bar, curSession, curSessionID, curDMType)
         local reversed = {}
         for ri = #raw, 1, -1 do reversed[#reversed + 1] = raw[ri] end
         ApplyTTHeader(StripRealm(bar._src.name) or "Unknown", "Death Recap")
-        local texPath = GetBarTexturePath()
+        local texPath, texKey = GetBarTexturePath()
         local deathTime = reversed[#reversed] and reversed[#reversed].timestamp or GetTime()
         local total = #reversed
         local count = math.min(TT_MAX, total)
@@ -608,7 +764,7 @@ local function PopulatePreview(bar, curSession, curSessionID, curDMType)
                 local curHP = ev.currentHP or 0
                 local hpPct = maxHP > 0 and (curHP / maxHP) or 0
                 hpPct = math.min(1, math.max(0, hpPct))
-                b.fill:SetStatusBarTexture(texPath); b.fill:SetMinMaxValues(0, 1); b.fill:SetValue(hpPct)
+                ApplyBarTexture(b.fill, texPath, texKey); b.fill:SetMinMaxValues(0, 1); b.fill:SetValue(hpPct)
                 local evType = ev.event or ""
                 local isHeal = (evType == "SPELL_HEAL" or evType == "SPELL_PERIODIC_HEAL")
                 local isFatal = (i == count and not isHeal)
@@ -661,7 +817,7 @@ local function PopulatePreview(bar, curSession, curSessionID, curDMType)
         sorted[#sorted + 1] = { spell = spell, amount = (ok and amt) or 0 }
     end
     local maxAmt = sorted[1] and sorted[1].amount or 1
-    local texPath = GetBarTexturePath()
+    local texPath, texKey = GetBarTexturePath()
     local count = math.min(TT_MAX, #sorted)
     for i = 1, TT_MAX do
         local b = _ttBars[i]
@@ -675,7 +831,7 @@ local function PopulatePreview(bar, curSession, curSessionID, curDMType)
                     b.fill:ClearAllPoints(); b.fill:SetPoint("TOPLEFT", b.spellIcon, "TOPRIGHT", 0, 0); b.fill:SetPoint("BOTTOMRIGHT", b.row, "BOTTOMRIGHT", 0, 0)
                 else b.spellIcon:Hide(); b.fill:ClearAllPoints(); b.fill:SetAllPoints(b.row) end
             else b.spellIcon:Hide(); b.fill:ClearAllPoints(); b.fill:SetAllPoints(b.row) end
-            b.fill:SetStatusBarTexture(texPath); b.fill:SetMinMaxValues(0, maxAmt); b.fill:SetValue(entry.amount)
+            ApplyBarTexture(b.fill, texPath, texKey); b.fill:SetMinMaxValues(0, maxAmt); b.fill:SetValue(entry.amount)
             b.fill:SetStatusBarColor(0x33/255, 0x33/255, 0x33/255)
             local spellName
             if spell.spellID then
@@ -1110,7 +1266,7 @@ local function CreateDMWindow(winIdx)
     end
 
     frame._bg = frame:CreateTexture(nil, "BACKGROUND")
-    frame._bg:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -HEADER_H)
+    frame._bg:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, -GetHeaderH())
     frame._bg:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
     frame._bg:SetColorTexture(cfg.bgR or 0, cfg.bgG or 0, cfg.bgB or 0, cfg.bgAlpha or 0.75)
 
@@ -1118,15 +1274,17 @@ local function CreateDMWindow(winIdx)
     --  Header
     ---------------------------------------------------------------------------
     local header = CreateFrame("Frame", nil, frame)
-    header:SetHeight(HEADER_H); header:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0); header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
+    header:SetHeight(GetHeaderH()); header:SetPoint("TOPLEFT", frame, "TOPLEFT", 0, 0); header:SetPoint("TOPRIGHT", frame, "TOPRIGHT", 0, 0)
     header:SetFrameLevel(frame:GetFrameLevel() + 5)
     W.header = header
 
     do local hc = cfg.hdrBgColor; local hR = hc and hc.r or 0x1B/255; local hG = hc and hc.g or 0x1B/255; local hB = hc and hc.b or 0x1B/255
     header._hdrBg = header:CreateTexture(nil, "BACKGROUND"); header._hdrBg:SetAllPoints(); header._hdrBg:SetColorTexture(hR, hG, hB, cfg.hdrBgAlpha or 1) end
 
-    W.titleText = header:CreateFontString(nil, "OVERLAY"); SetDMFont(W.titleText, 11)
-    W.titleText:SetPoint("LEFT", header, "LEFT", 6, 0)
+    local hdrFS = cfg.hdrFontSize or 11
+    local txOX, txOY = cfg.hdrTextOffX or 0, cfg.hdrTextOffY or 0
+    W.titleText = header:CreateFontString(nil, "OVERLAY"); SetDMFont(W.titleText, hdrFS)
+    W.titleText:SetPoint("LEFT", header, "LEFT", 6 + txOX, txOY)
     do
         local tR, tG, tB
         if cfg.hdrTextUseAccent ~= false then tR, tG, tB = GetAccentRGB()
@@ -1135,8 +1293,9 @@ local function CreateDMWindow(winIdx)
     end
     W.titleText:SetText("Damage Done")
 
-    W.timerText = header:CreateFontString(nil, "OVERLAY"); SetDMFont(W.timerText, 10)
+    W.timerText = header:CreateFontString(nil, "OVERLAY"); SetDMFont(W.timerText, hdrFS)
     W.timerText:SetTextColor(1, 1, 1, 0.7); W.timerText:SetPoint("LEFT", W.titleText, "RIGHT", 4, 0); W.timerText:SetText("(0:00)")
+    if wdb.hideTimer then W.timerText:Hide() end
 
     if EUI.RegAccent then
         EUI.RegAccent({ type = "callback", fn = function(r, g, b)
@@ -1157,7 +1316,7 @@ local function CreateDMWindow(winIdx)
     ---------------------------------------------------------------------------
     --  Header buttons
     ---------------------------------------------------------------------------
-    local btnSize = HEADER_H + 2
+    local btnSize = cfg.hdrIconSize or 22
     local btnPad = -2
 
     W.hdrIcons = {}
@@ -1194,9 +1353,19 @@ local function CreateDMWindow(winIdx)
 
     W.settingsBtn = MakeHeaderBtn("dm_settings.png", -(btnPad + 2), "Settings", function()
         ShowEDMMenu({
-            { text = "Settings", onClick = function()
-                if EUI.ShowModule then EUI:ShowModule("EllesmereUIDamageMeters") end
+            { text = "Hide in Dungeons", isActive = wdb.hideInDungeon, onClick = function()
+                wdb.hideInDungeon = not wdb.hideInDungeon
+                for _, w in ipairs(_windows) do w.UpdateVisibility() end
             end },
+            { text = "Hide in Raids", isActive = wdb.hideInRaid, onClick = function()
+                wdb.hideInRaid = not wdb.hideInRaid
+                for _, w in ipairs(_windows) do w.UpdateVisibility() end
+            end },
+            { text = "Hide out of Instances", isActive = wdb.hideOutOfInstance, onClick = function()
+                wdb.hideOutOfInstance = not wdb.hideOutOfInstance
+                for _, w in ipairs(_windows) do w.UpdateVisibility() end
+            end },
+            "---",
             { text = "Width", isInput = true,
               getValue = function() return math.floor(frame:GetWidth() + 0.5) end,
               setValue = function(v)
@@ -1206,107 +1375,27 @@ local function CreateDMWindow(winIdx)
                   wdb.width = math.floor(frame:GetWidth() + 0.5)
               end,
               min = MIN_W },
+            { text = "Height", isInput = true,
+              getValue = function() return math.floor(frame:GetHeight() + 0.5) end,
+              setValue = function(v)
+                  local left, top = frame:GetLeft(), frame:GetTop()
+                  frame:SetSize(frame:GetWidth(), math.max(MIN_H, v))
+                  if left and top then frame:ClearAllPoints(); frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", left, top) end
+                  wdb.height = math.floor(frame:GetHeight() + 0.5)
+              end,
+              min = MIN_H },
             { text = W.snapDisabled and "Enable Snapping" or "Disable Snapping", onClick = function()
                 W.snapDisabled = not W.snapDisabled
             end },
-            { text = W.windowLocked and "Unlock Window" or "Lock Window", onClick = function()
-                W.windowLocked = not W.windowLocked
-                wdb.locked = W.windowLocked
-                if W.resizeGrip then W.resizeGrip:SetAlpha(0) end
-                if W._updateLockIcon then W._updateLockIcon() end
+            { text = "Hide Timer", isActive = wdb.hideTimer, onClick = function()
+                wdb.hideTimer = not wdb.hideTimer
+                W.timerText:SetShown(not wdb.hideTimer)
             end },
-            { text = "Reset Data", onClick = function()
-                if C_DamageMeter and C_DamageMeter.ResetAllCombatSessions then
-                    C_DamageMeter.ResetAllCombatSessions()
-                    _combatStartTime = 0; _combatEndTime = 0
-                    for _, w in ipairs(_windows) do w.Refresh() end
-                end
+            { text = "Auto Swap Current/Overall", isActive = wdb.autoSwapMythic, onClick = function()
+                wdb.autoSwapMythic = not wdb.autoSwapMythic
             end },
-            "---",
-            { text = "Delete Window", isDisabled = function() return winIdx == 1 end, onClick = function()
-                if winIdx ~= 1 then W.Destroy() end
-            end },
-            { text = "Create New Window", isDisabled = function() return #_windows >= MAX_WINDOWS end, onClick = function()
-                if #_windows < MAX_WINDOWS then
-                    -- Clone size from source window
-                    local srcW = frame:GetWidth()
-                    local srcH = frame:GetHeight()
-                    local srcLeft = frame:GetLeft()
-                    local srcTop = frame:GetTop()
-                    local srcBot = frame:GetBottom()
-                    local gap = 10
-
-                    -- Try above first: new window bottom = source top + gap
-                    local newTop = srcTop + srcH + gap
-                    local newLeft = srcLeft
-                    local placement = "above"
-
-                    -- Check if above goes off-screen
-                    local screenTop = UIParent:GetTop() or 0
-                    if newTop > screenTop then
-                        -- Try below instead
-                        newTop = srcBot - gap
-                        placement = "below"
-                    end
-
-                    -- Check overlap with other windows
-                    if placement == "above" then
-                        for _, otherW in ipairs(_windows) do
-                            if otherW ~= W and otherW.frame then
-                                local oBot = otherW.frame:GetBottom()
-                                local oTop = otherW.frame:GetTop()
-                                local oLeft = otherW.frame:GetLeft()
-                                local oRight = otherW.frame:GetRight()
-                                if oBot and oTop and oLeft and oRight and newLeft and srcW then
-                                    local newBot = newTop - srcH
-                                    local newRight = newLeft + srcW
-                                    -- Overlap check
-                                    if newRight > oLeft and newLeft < oRight and newTop > oBot and newBot < oTop then
-                                        -- Place above the blocking window instead
-                                        newTop = oTop + srcH + gap
-                                        if newTop > screenTop then
-                                            -- Can't go above, fall to below source
-                                            newTop = srcBot - gap
-                                            placement = "below"
-                                            break
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-
-                    if placement == "below" then
-                        -- Check overlap when below
-                        for _, otherW in ipairs(_windows) do
-                            if otherW ~= W and otherW.frame then
-                                local oBot = otherW.frame:GetBottom()
-                                local oTop = otherW.frame:GetTop()
-                                local oLeft = otherW.frame:GetLeft()
-                                local oRight = otherW.frame:GetRight()
-                                if oBot and oTop and oLeft and oRight and newLeft and srcW then
-                                    local newBot = newTop - srcH
-                                    local newRight = newLeft + srcW
-                                    if newRight > oLeft and newLeft < oRight and newTop > oBot and newBot < oTop then
-                                        -- Place below the blocking window
-                                        newTop = oBot - gap
-                                    end
-                                end
-                            end
-                        end
-                    end
-
-                    -- Pre-set the new window's DB with cloned size and calculated position
-                    local newIdx = #_windows + 1
-                    local newWdb = WinDB(newIdx)
-                    newWdb.width = math.floor(srcW + 0.5)
-                    newWdb.height = math.floor(srcH + 0.5)
-                    newWdb.position = { x = newLeft, y = newTop }
-
-                    local newW = CreateDMWindow(newIdx)
-                    _windows[newIdx] = newW
-                    newW.ShowHome()
-                end
+            { text = "Settings", onClick = function()
+                if EUI.ShowModule then EUI:ShowModule("EllesmereUIDamageMeters") end
             end },
         }, W.settingsBtn)
     end)
@@ -1370,7 +1459,7 @@ local function CreateDMWindow(winIdx)
     -- + (new window) or x (close window) button, left of mode icon
     local winActionIcon = (winIdx == 1) and (MEDIA .. "dm_open.png") or (MEDIA .. "dm_close.png")
     local winActionTip = (winIdx == 1) and "New Window" or "Close Window"
-    W.winActionBtn = MakeHeaderBtn("dm_settings.png", -(btnSize * 3 + btnPad * 4 + 2), winActionTip, function()
+    W.winActionBtn = MakeHeaderBtn("dm_settings.png", -(btnSize * 4 + btnPad * 5 + 2), winActionTip, function()
         if winIdx ~= 1 and W.windowLocked then return end
         if winIdx == 1 then
             if #_windows >= MAX_WINDOWS then return end
@@ -1452,6 +1541,18 @@ local function CreateDMWindow(winIdx)
         local ir, ig, ib = GetIconColor()
         W._closeIconTex:SetVertexColor(ir, ig, ib, ICON_ALPHA * 0.5)
     end
+
+    -- Reset Data button, left of win action button
+    W.resetBtn = MakeHeaderBtn("dm_reset.png", -(btnSize * 3 + btnPad * 4 + 2), "Reset Data", function()
+        if C_DamageMeter and C_DamageMeter.ResetAllCombatSessions then
+            C_DamageMeter.ResetAllCombatSessions()
+            _combatStartTime = 0; _combatEndTime = 0
+            for _, w in ipairs(_windows) do w.Refresh() end
+        end
+    end)
+
+    -- Ordered list of header buttons for live resize/reposition
+    W.hdrBtns = { W.settingsBtn, W.segmentBtn, W.modeBtn, W.resetBtn, W.winActionBtn }
 
     ---------------------------------------------------------------------------
     --  Snap helpers (X-axis alignment + width matching against other DM windows)
@@ -2005,7 +2106,7 @@ local function CreateDMWindow(winIdx)
         viewport:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", 0, 0)
         -- Clamp scroll
         if content then
-            local viewH = frame:GetHeight() - HEADER_H
+            local viewH = frame:GetHeight() - GetHeaderH()
             if viewH < 1 then viewH = 1 end
             local totalH = content:GetHeight()
             local maxScr = math.max(0, totalH - viewH)
@@ -2046,7 +2147,7 @@ local function CreateDMWindow(winIdx)
         if not playerIdx then W.stickyPlayer.row:Hide(); W.stickySep:Hide(); ResetScrollAnchors(); W.stickyAtTop = false; return end
         local barH = PhysicalPixels(c.barHeight or 18); local barSp = PhysicalPixels(c.barSpacing); local stride = barH + barSp
         local scrollVal = viewport:GetVerticalScroll() or 0
-        local fullViewH = frame:GetHeight() - HEADER_H
+        local fullViewH = frame:GetHeight() - GetHeaderH()
         if fullViewH < 1 then fullViewH = 1 end
         local pxMult = (PP and PP.mult) or 1
         local barTop = (playerIdx - 1) * stride
@@ -2086,16 +2187,18 @@ local function CreateDMWindow(winIdx)
         local isCount = (W.curDMType == Enum.DamageMeterType.Interrupts or W.curDMType == Enum.DamageMeterType.Dispels)
         local src = sources[playerIdx]; local maxAmt = isDeaths and 1 or (sources[1] and sources[1].totalAmount or 1)
         local bar = W.stickyPlayer
-        local fontSize = c.fontSize or 11; local showIcon = (c.iconStyle or "spec") ~= "none"; local showClassColor = c.showClassColor ~= false
-        local texPath = GetBarTexturePath()
+        local leftFS = c.leftFontSize or c.fontSize or 11; local rightFS = c.rightFontSize or c.fontSize or 11
+        local showIcon = (c.iconStyle or "spec") ~= "none"; local showClassColor = c.showClassColor ~= false
+        local texPath, texKey = GetBarTexturePath()
         -- Layout cache: only rebuild on settings change
-        local stickyCacheKey = fontSize .. "|" .. texPath .. "|" .. tostring(showIcon) .. "|" .. tostring(showClassColor) .. "|" .. barH
+        local stickyCacheKey = leftFS .. "|" .. rightFS .. "|" .. texPath .. "|" .. tostring(showIcon) .. "|" .. tostring(showClassColor) .. "|" .. barH
         if stickyCacheKey ~= W._stickyCacheKey then
             W._stickyCacheKey = stickyCacheKey
             bar.row:SetHeight(barH)
             bar.fill:ClearAllPoints(); bar.fill:SetHeight(barH)
-            bar.fill:SetStatusBarTexture(texPath)
-            SetDMFont(bar.pos, fontSize); SetDMFont(bar.label, fontSize); SetDMFont(bar.amount, fontSize)
+            ApplyBarTexture(bar.fill, texPath, texKey)
+            bar.fill:SetAlpha(c.barFillAlpha or 1)
+            SetDMFont(bar.pos, leftFS); SetDMFont(bar.label, leftFS); SetDMFont(bar.amount, rightFS)
             bar.label:SetWidth(math.max(20, (frame:GetWidth() or 200) * 0.75))
             W._stickyClassCache = nil  -- force icon/color rebuild
         end
@@ -2123,7 +2226,10 @@ local function CreateDMWindow(winIdx)
             bar.fill:SetMinMaxValues(0, maxAmt); bar.fill:SetValue(src.totalAmount or 0)
         end
         -- Rank: only when position changes
-        if playerIdx ~= W._stickyRankCache then
+        local hideNums = c.hideNumbers
+        if hideNums then
+            bar.pos:SetText("")
+        elseif playerIdx ~= W._stickyRankCache then
             W._stickyRankCache = playerIdx
             bar.pos:SetText(RANK_STRINGS[playerIdx] or (playerIdx .. "."))
         end
@@ -2162,8 +2268,10 @@ local function CreateDMWindow(winIdx)
             local tBars = ProfBegin("Refresh.Bars")
             local sources = session.combatSources
             local c = DB(); local barH = PhysicalPixels(c.barHeight or 18); local barSp = PhysicalPixels(c.barSpacing); local stride = barH + barSp
-            local fontSize = c.fontSize or 11; local showIcon = (c.iconStyle or "spec") ~= "none"
-            local showClassColor = c.showClassColor ~= false; local texPath = GetBarTexturePath()
+            local leftFS = c.leftFontSize or c.fontSize or 11; local rightFS = c.rightFontSize or c.fontSize or 11
+            local fontSize = leftFS -- compat for cacheKey
+            local showIcon = (c.iconStyle or "spec") ~= "none"
+            local showClassColor = c.showClassColor ~= false; local texPath, texKey = GetBarTexturePath()
             local rowWidth = viewport:GetWidth() or 200
             local labelMaxW = math.max(20, rowWidth * 0.75)
             local isDeaths = (W.curDMType == Enum.DamageMeterType.Deaths)
@@ -2179,7 +2287,7 @@ local function CreateDMWindow(winIdx)
             count = math.min(#sources, BAR_POOL_SIZE)
             -- Cache key: detects settings changes that require full bar rebuild
             local iconStyle = c.iconStyle or "spec"
-            local cacheKey = fontSize .. "|" .. texPath .. "|" .. iconStyle .. "|" .. tostring(showClassColor) .. "|" .. tostring(c.barColorUseAccent) .. "|" .. barH .. "|" .. barSp
+            local cacheKey = leftFS .. "|" .. rightFS .. "|" .. texPath .. "|" .. iconStyle .. "|" .. tostring(showClassColor) .. "|" .. tostring(c.barColorUseAccent) .. "|" .. barH .. "|" .. barSp .. "|" .. tostring(c.hideNumbers) .. "|" .. tostring(c.leftTextUseClassColor) .. "|" .. tostring(c.rightTextUseClassColor) .. "|" .. tostring(c.barFillAlpha)
             local fullRebuild = (cacheKey ~= W._barCacheKey)
             if fullRebuild then W._barCacheKey = cacheKey end
 
@@ -2207,10 +2315,15 @@ local function CreateDMWindow(winIdx)
                         bar.row:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, yOff)
                         bar.row:SetHeight(barH)
                         bar.fill:ClearAllPoints(); bar.fill:SetHeight(barH)
-                        bar.fill:SetStatusBarTexture(texPath)
-                        SetDMFont(bar.pos, fontSize); SetDMFont(bar.label, fontSize); SetDMFont(bar.amount, fontSize)
+                        ApplyBarTexture(bar.fill, texPath, texKey)
+                        bar.fill:SetAlpha(c.barFillAlpha or 1)
+                        SetDMFont(bar.pos, leftFS); SetDMFont(bar.label, leftFS); SetDMFont(bar.amount, rightFS)
                         bar.label:SetWidth(labelMaxW)
-                        bar.pos:SetText(RANK_STRINGS[i] or (i .. "."))
+                        if c.hideNumbers then
+                            bar.pos:SetText("")
+                        else
+                            bar.pos:SetText(RANK_STRINGS[i] or (i .. "."))
+                        end
                         -- Invalidate icon + color caches so they rebuild
                         bar._cachedClass = nil; bar._cachedColorClass = nil
                     end
@@ -2248,6 +2361,29 @@ local function CreateDMWindow(winIdx)
                             bar._cachedColorClass = false
                             if c.barColorUseAccent ~= false then local ar2, ag2, ab2 = GetAccentRGB(); bar.fill:SetStatusBarColor(ar2, ag2, ab2)
                             else local bc = c.barColor; bar.fill:SetStatusBarColor(bc and bc.r or 0.35, bc and bc.g or 0.55, bc and bc.b or 0.8) end
+                        end
+
+                        -- Left text color (pos + label)
+                        if c.leftTextUseClassColor then
+                            local cc = classFile and RAID_CLASS_COLORS[classFile]
+                            local lr, lg, lb = cc and cc.r or 1, cc and cc.g or 1, cc and cc.b or 1
+                            bar.label:SetTextColor(lr, lg, lb)
+                            bar.pos:SetTextColor(lr, lg, lb)
+                        elseif fullRebuild then
+                            local tc = c.leftTextColor
+                            local lr, lg, lb = tc and tc.r or 1, tc and tc.g or 1, tc and tc.b or 1
+                            bar.label:SetTextColor(lr, lg, lb)
+                            bar.pos:SetTextColor(lr, lg, lb)
+                        end
+                        -- Right text color (amount)
+                        if c.rightTextUseClassColor then
+                            local cc = classFile and RAID_CLASS_COLORS[classFile]
+                            local rr, rg, rb = cc and cc.r or 1, cc and cc.g or 1, cc and cc.b or 1
+                            bar.amount:SetTextColor(rr, rg, rb)
+                        elseif fullRebuild then
+                            local tc = c.rightTextColor
+                            local rr, rg, rb = tc and tc.r or 1, tc and tc.g or 1, tc and tc.b or 1
+                            bar.amount:SetTextColor(rr, rg, rb)
                         end
 
                         -- Name
@@ -2394,7 +2530,8 @@ local function CreateDMWindow(winIdx)
             for ri = #events, 1, -1 do reversed[#reversed + 1] = events[ri] end
             local c = DB(); local barH = PhysicalPixels(c.barHeight or 18)
             local barSp = PhysicalPixels(c.barSpacing); local stride = barH + barSp
-            local fontSize = c.fontSize or 11; local texPath = GetBarTexturePath()
+            local leftFS = c.leftFontSize or c.fontSize or 11; local rightFS = c.rightFontSize or c.fontSize or 11
+            local texPath, texKey = GetBarTexturePath()
             local deathTime = reversed[#reversed] and reversed[#reversed].timestamp or GetTime()
             local evCount = math.min(#reversed, BAR_POOL_SIZE)
             for i = 1, BAR_POOL_SIZE do
@@ -2420,7 +2557,7 @@ local function CreateDMWindow(winIdx)
                     local curHP = ev.currentHP or 0
                     local hpPct = maxHP > 0 and (curHP / maxHP) or 0
                     hpPct = math.min(1, math.max(0, hpPct))
-                    bar.fill:SetStatusBarTexture(texPath); bar.fill:SetMinMaxValues(0, 1); bar.fill:SetValue(hpPct)
+                    ApplyBarTexture(bar.fill, texPath, texKey); bar.fill:SetMinMaxValues(0, 1); bar.fill:SetValue(hpPct)
                     local evType = ev.event or ""
                     local isHeal = (evType == "SPELL_HEAL" or evType == "SPELL_PERIODIC_HEAL")
                     local isFatal = (i == evCount and not isHeal)
@@ -2429,7 +2566,7 @@ local function CreateDMWindow(winIdx)
                     else
                         bar.fill:SetStatusBarColor(0.60, 0.08, 0.08)
                     end
-                    SetDMFont(bar.label, fontSize); SetDMFont(bar.amount, fontSize)
+                    SetDMFont(bar.label, leftFS); SetDMFont(bar.amount, rightFS)
                     bar.label:SetTextColor(1, 1, 1); bar.amount:SetTextColor(1, 1, 1)
                     -- Label: time before death + spell name
                     local spellName = ev.spellName or ""
@@ -2486,7 +2623,7 @@ local function CreateDMWindow(winIdx)
             return
         end
         local spells = srcData.combatSpells; local c = DB(); local barH = PhysicalPixels(c.barHeight or 18)
-        local barSp = PhysicalPixels(c.barSpacing); local stride = barH + barSp; local fontSize = c.fontSize or 11; local texPath = GetBarTexturePath()
+        local barSp = PhysicalPixels(c.barSpacing); local stride = barH + barSp; local leftFS = c.leftFontSize or c.fontSize or 11; local rightFS = c.rightFontSize or c.fontSize or 11; local texPath, texKey = GetBarTexturePath()
         local sorted = {}
         for _, spell in ipairs(spells) do local ok, amt = pcall(function() return spell.totalAmount end); sorted[#sorted + 1] = { spell = spell, amount = (ok and amt) or 0 } end
         -- API returns combatSpells pre-sorted; no table.sort needed
@@ -2509,11 +2646,11 @@ local function CreateDMWindow(winIdx)
                 else bar.classIcon:Hide() end
                 bar.fill:ClearAllPoints(); bar.fill:SetPoint("TOPLEFT", bar.row, "TOPLEFT", iconOffset, 0)
                 bar.fill:SetPoint("TOPRIGHT", bar.row, "TOPRIGHT", 0, 0); bar.fill:SetHeight(barH)
-                bar.fill:SetStatusBarTexture(texPath); bar.fill:SetMinMaxValues(0, maxAmt); bar.fill:SetValue(entry.amount)
+                ApplyBarTexture(bar.fill, texPath, texKey); bar.fill:SetMinMaxValues(0, maxAmt); bar.fill:SetValue(entry.amount)
                 if W.sourceClass and RAID_CLASS_COLORS[W.sourceClass] then
                     local cc = RAID_CLASS_COLORS[W.sourceClass]; bar.fill:SetStatusBarColor(cc.r, cc.g, cc.b)
                 else local ar2, ag2, ab2 = GetAccentRGB(); bar.fill:SetStatusBarColor(ar2, ag2, ab2) end
-                SetDMFont(bar.label, fontSize); SetDMFont(bar.amount, fontSize)
+                SetDMFont(bar.label, leftFS); SetDMFont(bar.amount, rightFS)
                 local spellName
                 if spell.spellID then local okS, sn = pcall(function() return C_Spell and C_Spell.GetSpellName and C_Spell.GetSpellName(spell.spellID) end); spellName = (okS and sn) or nil end
                 bar.label:SetText(spellName or spell.creatureName or "Unknown")
@@ -2828,11 +2965,16 @@ local function CreateDMWindow(winIdx)
     function W.UpdateVisibility()
         if not frame then return end
         local c = DB()
-        if EUI._unlockActive then frame:SetAlpha(1); frame:EnableMouse(true); frame:Show(); return end
+        if EUI._unlockActive or ns._optionsOpen then frame:SetAlpha(1); frame:EnableMouse(true); frame:Show(); return end
         local vis = EUI.EvalVisibility and EUI.EvalVisibility(c)
+        if not vis or vis == false then frame:Hide(); return end
+        -- Per-window instance visibility
+        local _, iType = IsInInstance()
+        if wdb.hideInDungeon and iType == "party" then frame:Hide(); return end
+        if wdb.hideInRaid and iType == "raid" then frame:Hide(); return end
+        if wdb.hideOutOfInstance and (iType == "none" or iType == nil) then frame:Hide(); return end
         if vis == "mouseover" then frame:Hide()
-        elseif vis then frame:SetAlpha(1); frame:EnableMouse(true); frame:Show()
-        else frame:Hide() end
+        else frame:SetAlpha(1); frame:EnableMouse(true); frame:Show() end
     end
 
     if EUI.RegisterVisibilityUpdater then EUI.RegisterVisibilityUpdater(W.UpdateVisibility) end
@@ -2900,9 +3042,44 @@ ns.ApplyHeader = function()
     local tR, tG, tB
     if cfg.hdrTextUseAccent ~= false then tR, tG, tB = GetAccentRGB()
     else local c = cfg.hdrTextColor; tR = c and c.r or 1; tG = c and c.g or 1; tB = c and c.b or 1 end
+    local hdrFS = cfg.hdrFontSize or 11
+    local hdrH = GetHeaderH()
+    local iconSz = cfg.hdrIconSize or 14
     for _, w in ipairs(_windows) do
-        if w.header and w.header._hdrBg then w.header._hdrBg:SetColorTexture(hR, hG, hB, hA) end
-        if w.titleText then w.titleText:SetTextColor(tR, tG, tB, 1) end
+        if w.header then
+            w.header:SetHeight(hdrH)
+            if w.header._hdrBg then w.header._hdrBg:SetColorTexture(hR, hG, hB, hA) end
+        end
+        if w.frame and w.frame._bg then
+            w.frame._bg:ClearAllPoints()
+            w.frame._bg:SetPoint("TOPLEFT", w.frame, "TOPLEFT", 0, -hdrH)
+            w.frame._bg:SetPoint("BOTTOMRIGHT", w.frame, "BOTTOMRIGHT", 0, 0)
+        end
+        if w.titleText then
+            SetDMFont(w.titleText, hdrFS)
+            w.titleText:SetTextColor(tR, tG, tB, 1)
+            local txOX, txOY = cfg.hdrTextOffX or 0, cfg.hdrTextOffY or 0
+            w.titleText:ClearAllPoints()
+            w.titleText:SetPoint("LEFT", w.header, "LEFT", 6 + txOX, txOY)
+        end
+        if w.timerText then
+            SetDMFont(w.timerText, hdrFS)
+        end
+        -- Resize and reposition header buttons
+        if w.hdrBtns then
+            local btnPad = -2
+            for bi, btn in ipairs(w.hdrBtns) do
+                btn:SetSize(iconSz, iconSz)
+                btn:ClearAllPoints()
+                btn:SetPoint("RIGHT", w.header, "RIGHT", -(iconSz * (bi - 1) + btnPad * bi + 2), 0)
+            end
+        end
+        -- Close icon is 2px larger than other icons
+        if w._closeIconTex then
+            w._closeIconTex:ClearAllPoints()
+            w._closeIconTex:SetSize(iconSz + 2, iconSz + 2)
+            w._closeIconTex:SetPoint("CENTER", w.winActionBtn, "CENTER", 0, 0)
+        end
     end
 end
 
@@ -3088,12 +3265,22 @@ local _sharedTicker
 
 local function SharedRefreshTick()
     local t0 = ProfBegin("RefreshTick")
-    if _combatEndTime > 0 then
-        if _needsFinalRefresh and not IsGroupInCombat() then
+    -- Player out of combat but group still fighting (player died mid-pull)
+    if _needsFinalRefresh then
+        if not IsGroupInCombat() then
+            -- Group combat ended: freeze timer, final refresh, stop
+            _combatEndTime = GetTime()
             _inCombat = false
             _needsFinalRefresh = false
             for _, w in ipairs(_windows) do w.Refresh() end
+            if _sharedTicker then _sharedTicker:Cancel(); _sharedTicker = nil end
+            ProfEnd("RefreshTick", t0)
+            return
         end
+        -- Group still fighting: fall through to normal refresh
+    end
+    if _combatEndTime > 0 then
+        -- Combat fully ended, ticker should stop
         if _sharedTicker then _sharedTicker:Cancel(); _sharedTicker = nil end
         ProfEnd("RefreshTick", t0)
         return
@@ -3147,12 +3334,13 @@ combatFrame:SetScript("OnEvent", function(_, event)
         end
         StartSharedTicker()
     else
-        -- Freeze timer immediately on player leaving combat
-        _combatEndTime = GetTime()
         -- Check if group is still fighting (player died but boss alive)
         if IsGroupInCombat() then
             _needsFinalRefresh = true  -- let tick poll until group leaves combat
+            -- Don't freeze timer -- group is still in combat
         else
+            -- Freeze timer: entire group out of combat
+            _combatEndTime = GetTime()
             _inCombat = false
             _needsFinalRefresh = false
             for _, w in ipairs(_windows) do w.Refresh() end
@@ -3169,6 +3357,21 @@ combatFrame:SetScript("OnEvent", function(_, event)
     end
 end)
 
+
+-------------------------------------------------------------------------------
+--  Reset Data keybind button (hidden, receives override binding click)
+-------------------------------------------------------------------------------
+if not _G["EllesmereUIDMResetBindBtn"] then
+    local btn = CreateFrame("Button", "EllesmereUIDMResetBindBtn", UIParent)
+    btn:Hide()
+    btn:SetScript("OnClick", function()
+        if C_DamageMeter and C_DamageMeter.ResetAllCombatSessions then
+            C_DamageMeter.ResetAllCombatSessions()
+            _combatStartTime = 0; _combatEndTime = 0
+            for _, w in ipairs(_windows) do w.Refresh() end
+        end
+    end)
+end
 
 -------------------------------------------------------------------------------
 --  Init
@@ -3189,6 +3392,13 @@ initFrame:SetScript("OnEvent", function(self)
     SetCVarSafe("damageMeterEnabled", 0)
     AppendDMSharedMedia()
     local cfg = DB()
+
+    _playerGUID = UnitGUID("player")
+
+    -- Restore reset data keybind
+    if cfg.resetDataKey and _G.EllesmereUIDMResetBindBtn then
+        SetOverrideBindingClick(_G.EllesmereUIDMResetBindBtn, true, cfg.resetDataKey, "EllesmereUIDMResetBindBtn")
+    end
 
     -- Defer window creation off the login frame to avoid blocking
     local cfg = DB()
