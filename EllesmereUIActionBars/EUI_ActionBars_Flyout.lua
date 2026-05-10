@@ -210,7 +210,7 @@ end
 -------------------------------------------------------------------------------
 local function InstallBlizzFlyoutHook()
     local sf = _G.SpellFlyout
-    if not sf then return false end
+    if not sf or not EFD then return false end
     if EFD(sf).hooked then return true end
     EFD(sf).hooked = true
     sf:HookScript("OnShow", OnBlizzardFlyoutShow)

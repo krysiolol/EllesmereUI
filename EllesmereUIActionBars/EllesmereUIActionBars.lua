@@ -2544,6 +2544,32 @@ local function SnapForScale(x, barScale)
     return math.floor(x + 0.5)
 end
 
+-- Grow direction for icon layout + fixed-edge resize (on EAB to avoid adding
+-- another file-scope local; Lua caps the main chunk at 200 locals).
+-- When unlock-anchored to another EAB bar with the same orientation, use the
+-- anchor target's *effective* grow (recurse the chain). Otherwise a bar in the
+-- middle can inherit from its parent visually while its DB still holds the old
+-- grow, and bars anchored to it would read that stale value instead of the chain.
+function EAB:ResolveGrowDirectionForLayout(key, s, depth)
+    depth = depth or 0
+    if depth > 12 then
+        return (s.growDirection or "up"):upper()
+    end
+    local own = (s.growDirection or "up"):upper()
+    if not (EllesmereUI and EllesmereUI.IsUnlockAnchored and EllesmereUI.IsUnlockAnchored(key)) then
+        return own
+    end
+    local adb = _G.EllesmereUIDB and _G.EllesmereUIDB.unlockAnchors
+    local ai = adb and adb[key]
+    local tKey = ai and ai.target
+    if not tKey then return own end
+    local tSettings = self.db.profile.bars and self.db.profile.bars[tKey]
+    if not tSettings then return own end
+    if (tSettings.orientation or "horizontal") ~= (s.orientation or "horizontal") then
+        return own
+    end
+    return self:ResolveGrowDirectionForLayout(tKey, tSettings, depth + 1)
+end
 
 -- Compute layout for a bar and return a table of per-button data.
 -- Returns: { [i] = { x, y, w, h, show } }, frameW, frameH
@@ -2569,7 +2595,7 @@ local function ComputeBarLayout(key)
     -- Pixel-lock happens below after shape adjustments.
     local padding = s.buttonPadding or 2
     local isVertical = (s.orientation == "vertical")
-    local growDir = (s.growDirection or "up"):upper()
+    local growDir = EAB:ResolveGrowDirectionForLayout(key, s)
     local shape = s.buttonShape or "none"
 
     local base = barBaseSize[key]
@@ -2706,7 +2732,7 @@ local function LayoutBar(key)
     -- Pixel-lock happens below after shape adjustments.
     local padding = s.buttonPadding or 2
     local isVertical = (s.orientation == "vertical")
-    local growDir = (s.growDirection or "up"):upper()
+    local growDir = EAB:ResolveGrowDirectionForLayout(key, s)
     local shape = s.buttonShape or "none"
 
     -- Button size: use explicit width/height if set, otherwise base size.
@@ -3890,11 +3916,26 @@ function EAB:GetOrientationForBar(barKey)
     return s.orientation ~= "vertical"
 end
 
+function EAB:LayoutAnchoredBarsFrom(targetKey, depth)
+    if not targetKey or (depth or 0) > 12 then return end
+    local adb = _G.EllesmereUIDB and _G.EllesmereUIDB.unlockAnchors
+    if not adb then return end
+    local nextDepth = (depth or 0) + 1
+    for childKey, ai in pairs(adb) do
+        if ai.target == targetKey and childKey ~= targetKey
+            and self.db.profile.bars[childKey] and barFrames[childKey] then
+            LayoutBar(childKey)
+            self:LayoutAnchoredBarsFrom(childKey, nextDepth)
+        end
+    end
+end
+
 function EAB:SetOrientationForBar(barKey, isHorizontal)
     local s = self.db.profile.bars[barKey]
     if not s then return end
     s.orientation = isHorizontal and "horizontal" or "vertical"
     LayoutBar(barKey)
+    self:LayoutAnchoredBarsFrom(barKey, 0)
 end
 
 function EAB:SetGrowDirectionForBar(barKey, dir)
@@ -3902,6 +3943,7 @@ function EAB:SetGrowDirectionForBar(barKey, dir)
     if not s then return end
     s.growDirection = dir or "up"
     LayoutBar(barKey)
+    self:LayoutAnchoredBarsFrom(barKey, 0)
 end
 
 -------------------------------------------------------------------------------
