@@ -319,7 +319,7 @@ function Calc:GetNextUpgradeGain(item)
     return (td.ranks[rank + 1] or 0) - (td.ranks[rank] or 0)
 end
 
--- Returns a table mapping crestName -> { quantity, cap, earned, weeklyEarned, weeklyCap } for each track.
+-- Returns a table mapping crestName -> { quantity, cap, earned } for each track.
 function Calc:GetPlayerCrests()
     local owned = {}
     for _, td in pairs(Data.tracks) do
@@ -327,11 +327,9 @@ function Calc:GetPlayerCrests()
             local info = C_CurrencyInfo.GetCurrencyInfo(td.currID)
             if info then
                 owned[td.crestName] = {
-                    quantity    = info.quantity    or 0,
-                    cap         = (info.maxQuantity and info.maxQuantity > 0) and info.maxQuantity or nil,
-                    earned      = info.totalEarned or 0,
-                    weeklyEarned = info.quantityEarnedThisWeek or 0,
-                    weeklyCap   = (info.canEarnPerWeek and info.maxWeeklyQuantity > 0) and info.maxWeeklyQuantity or nil,
+                    quantity = info.quantity    or 0,
+                    cap      = (info.maxQuantity and info.maxQuantity > 0) and info.maxQuantity or nil,
+                    earned   = info.totalEarned or 0,
                 }
             end
         end
@@ -1458,10 +1456,10 @@ PopulateGear = function()
                 rowFrame.cap:Hide()
             end
             if showWeeklyRem then
-                local wCap  = info and info.weeklyCap
-                local wEarn = info and info.weeklyEarned or 0
-                if wCap then
-                    local rem = math.max(0, wCap - wEarn)
+                local cap    = info and info.cap
+                local earned = info and info.earned or 0
+                if cap then
+                    local rem    = math.max(0, cap - earned)
                     local remStr = rem > 0 and tostring(rem) or "|cff20ff200|r"
                     rowFrame.weeklyRem:SetText(remStr)
                 else
