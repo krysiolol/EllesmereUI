@@ -409,6 +409,23 @@ initFrame:SetScript("OnEvent", function(self)
         end
         y = y - h
 
+        -- -- SESSION HISTORY ---------------------------------------------------
+        _, h = W:SectionHeader(parent, "SESSION HISTORY", y); y = y - h
+
+        _, h = W:DualRow(parent, y,
+            { type="toggle", text="Remember Last Chat Lines",
+              tooltip="Saves the most recent lines per chat tab (per character), except Blizzard's combat log window, so they reappear after /reload or relog. Stored separately from layout profiles.",
+              getValue=function() return Cfg("persistChatHistory") ~= false end,
+              setValue=function(v)
+                  Set("persistChatHistory", v)
+                  if ECHAT.InitChatSessionHistory then ECHAT.InitChatSessionHistory() end
+              end },
+            { type="slider", text="Max Lines to Keep",
+              min = 20, max = 300, step = 10,
+              getValue=function() return Cfg("persistChatHistoryMaxLines") or 100 end,
+              setValue=function(v) Set("persistChatHistoryMaxLines", v) end })
+        y = y - h
+
         -- -- EXTRAS ------------------------------------------------------------
         _, h = W:SectionHeader(parent, "EXTRAS", y); y = y - h
 
