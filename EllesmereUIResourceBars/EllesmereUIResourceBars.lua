@@ -681,6 +681,17 @@ local DEFAULTS = {
             latencyShowText   = false,
             latencyR = 0.835, latencyG = 0.290, latencyB = 0.290, latencyA = 1.0,
         },
+        totemBar = {
+            iconSize      = 30,
+            spacing       = 2,
+            showTimer     = true,
+            timerSize     = 11,
+            borderSize    = 1,
+            borderR       = 0, borderG = 0, borderB = 0, borderA = 1,
+            borderTexture = "solid",
+            unlockPos     = nil,
+            enabledClasses = nil,  -- nil = disabled; { SHAMAN = true, ... } = enabled for listed classes
+        },
         general = {
             anchorX     = 0,
             anchorY     = -100,
@@ -702,6 +713,10 @@ local secondaryBar  -- bar-style secondary (e.g. Devourer soul fragments, Elemen
 local secondaryBarTicks = {}  -- tick mark texture cache for bar-type secondary
 local secondaryPipTicks = {}  -- tick mark texture cache for pip-type secondary hash lines
 local castBarFrame
+local totemBarFrame
+local _totemBorderOverlays = setmetatable({}, { __mode = "k" })
+local _totemHooked = false
+local _totemOrigParent
 local _latencySendTime      -- GetTime() at CURRENT_SPELL_CAST_CHANGED
 local _latencyEventActive   -- true when CURRENT_SPELL_CAST_CHANGED is registered
 local _erbEventFrame        -- file-scoped ref to the event frame (assigned in OnEnable)
@@ -1254,6 +1269,53 @@ local function RegisterUnlockElements()
             end,
             setHeight = function(_, h) S().height = PP.Snap(h); Rebuild() end,
             savePos = castSave, loadPos = castLoad, clearPos = castClear, applyPos = castApply,
+        })
+    end
+
+    -- Totem Bar
+    do
+        local function S() return ERB.db.profile.totemBar end
+        local function totemSave(key, point, relPoint, x, y)
+            if not point then return end
+            local tb = S()
+            tb.unlockPos = { point = point, relPoint = relPoint or point, x = x, y = y }
+            if not EllesmereUI._unlockActive and totemBarFrame then
+                totemBarFrame:ClearAllPoints()
+                totemBarFrame:SetPoint(point, UIParent, relPoint or point, x, y)
+            end
+        end
+        local function totemLoad()
+            local pos = S().unlockPos
+            if not pos then return nil end
+            local pt = pos.point
+            return { point = pt, relPoint = pos.relPoint or pt, x = pos.x, y = pos.y }
+        end
+        local function totemClear()
+            S().unlockPos = nil
+        end
+        local function totemApply()
+            local pos = S().unlockPos
+            if not pos then return end
+            if totemBarFrame then
+                local pt = pos.point
+                local sx, sy = SnapXY(pos.x, pos.y, totemBarFrame, pos)
+                totemBarFrame:ClearAllPoints()
+                totemBarFrame:SetPoint(pt, UIParent, pos.relPoint or pt, sx, sy)
+            end
+        end
+        elements[#elements + 1] = MK({
+            key = "ERB_TotemBar", label = "Totem Bar", group = "Resource Bars", order = 505,
+            noResize = true,
+            noAnchorTarget = true,
+            getFrame = function() return totemBarFrame end,
+            getSize  = function()
+                local tb = S()
+                local iconSz = tb.iconSize or 30
+                local spacing = tb.spacing or 2
+                -- Estimate width based on max 5 totems
+                return iconSz * 5 + spacing * 4, iconSz
+            end,
+            savePos = totemSave, loadPos = totemLoad, clearPos = totemClear, applyPos = totemApply,
         })
     end
 
@@ -4383,6 +4445,234 @@ OnEmpowerUpdate = function()
 end
 
 -------------------------------------------------------------------------------
+--  Totem Bar
+--  Reparents Blizzard TotemFrame, repositions buttons in a clean row, and
+--  adds overlay border frames (our own frames, never written to Blizzard).
+-------------------------------------------------------------------------------
+local function GetTotemSettings()
+    return ERB.db and ERB.db.profile and ERB.db.profile.totemBar
+end
+
+-- Cached layout state to avoid redundant work on every Update hook
+local _totemLayoutCache = {}
+local _totemActiveSet = {}  -- reusable set for O(1) cleanup lookups
+
+local function LayoutTotemBar()
+    if not totemBarFrame or not TotemFrame then return end
+    local tb = GetTotemSettings()
+    if not tb or not tb.enabledClasses then return end
+
+    local spacing = tb.spacing or 2
+    local PP = EllesmereUI and EllesmereUI.PP
+    if PP and PP.Snap then spacing = PP.Snap(spacing) end
+    local iconSize = tb.iconSize or 30
+
+    -- Use SetScale on TotemFrame rather than SetSize on individual buttons.
+    -- Buttons keep their native template size; scale controls visual size.
+    local nativeSize = 37
+    local iconScale = iconSize / nativeSize
+
+    -- Reparent and position TotemFrame every call (Blizzard's Update can reset these)
+    TotemFrame:SetParent(totemBarFrame)
+    TotemFrame:SetFrameStrata("HIGH")
+    TotemFrame:ClearAllPoints()
+    TotemFrame:SetPoint("LEFT", totemBarFrame, "LEFT", 0, 0)
+    TotemFrame:Show()
+
+    -- Only re-apply scale when setting changed
+    local cache = _totemLayoutCache
+    if cache.iconScale ~= iconScale then
+        TotemFrame:SetScale(iconScale)
+        cache.iconScale = iconScale
+    end
+
+    -- Collect active totem buttons (reuse table)
+    local buttons = cache.buttons
+    if not buttons then buttons = {}; cache.buttons = buttons end
+    local count = 0
+    for _, child in ipairs({ TotemFrame:GetChildren() }) do
+        if child:IsShown() and child.Icon and child:GetObjectType() == "Button" then
+            count = count + 1
+            buttons[count] = child
+        end
+    end
+    -- Trim stale entries
+    for i = count + 1, #buttons do buttons[i] = nil end
+
+    local scaledSpacing = spacing / iconScale
+    local zoom = 0.055
+    local timerSize = tb.timerSize or 11
+    local scaledTimerSize = math.max(6, math.floor(timerSize / iconScale + 0.5))
+    local fontPath = EllesmereUI.GetFont and EllesmereUI.GetFont() or STANDARD_TEXT_FONT
+    local outlineMode = EllesmereUI.GetOutline and EllesmereUI.GetOutline() or "OUTLINE"
+
+    wipe(_totemActiveSet)
+    for i, btn in ipairs(buttons) do
+        _totemActiveSet[btn] = true
+
+        btn:ClearAllPoints()
+        if i == 1 then
+            btn:SetPoint("LEFT", TotemFrame, "LEFT", 0, 0)
+        else
+            btn:SetPoint("LEFT", buttons[i - 1], "RIGHT", scaledSpacing, 0)
+        end
+
+        -- Hide Blizzard's circular border
+        if btn.Border then btn.Border:Hide() end
+
+        -- Make Icon frame fill the entire button
+        if btn.Icon then
+            btn.Icon:ClearAllPoints()
+            btn.Icon:SetAllPoints(btn)
+        end
+
+        -- Square the icon: remove circular mask
+        if btn.Icon and btn.Icon.Texture and btn.Icon.TextureMask then
+            btn.Icon.Texture:RemoveMaskTexture(btn.Icon.TextureMask)
+            btn.Icon.TextureMask:Hide()
+        end
+        if btn.Icon and btn.Icon.Cooldown and btn.Icon.TextureMask then
+            pcall(btn.Icon.Cooldown.RemoveMaskTexture, btn.Icon.Cooldown, btn.Icon.TextureMask)
+        end
+
+        -- Apply icon zoom crop
+        if btn.Icon and btn.Icon.Texture then
+            btn.Icon.Texture:SetTexCoord(zoom, 1 - zoom, zoom, 1 - zoom)
+        end
+
+        -- Timer text
+        if btn.Duration then
+            if tb.showTimer then
+                btn.Duration:SetTextColor(1, 1, 1, 1)
+            else
+                btn.Duration:SetTextColor(0, 0, 0, 0)
+            end
+            btn.Duration:SetFont(fontPath, scaledTimerSize, outlineMode)
+            btn.Duration:SetDrawLayer("OVERLAY", 7)
+            btn.Duration:ClearAllPoints()
+            btn.Duration:SetPoint("CENTER", btn, "CENTER", 0, 0)
+            btn.Duration:SetJustifyH("CENTER")
+            btn.Duration:SetJustifyV("MIDDLE")
+        end
+
+        -- Border overlay (our own frame in the button's scale space)
+        local overlay = _totemBorderOverlays[btn]
+        if not overlay then
+            overlay = CreateFrame("Frame", nil, btn)
+            _totemBorderOverlays[btn] = overlay
+        end
+        overlay:SetFrameLevel(btn:GetFrameLevel() + 3)
+        overlay:ClearAllPoints()
+        overlay:SetAllPoints(btn.Icon or btn)
+        overlay:Show()
+        local bs = tb.borderSize or 0
+        local texKey = tb.borderTexture or "solid"
+        EllesmereUI.ApplyBorderStyle(overlay, bs,
+            tb.borderR or 0, tb.borderG or 0, tb.borderB or 0, tb.borderA or 1,
+            texKey, tb.borderTextureOffset, tb.borderTextureOffsetY,
+            tb.borderTextureShiftX, tb.borderTextureShiftY, "resourcebars", bs)
+    end
+
+    -- Hide overlays for buttons no longer active (O(n) via set lookup)
+    for btn, overlay in pairs(_totemBorderOverlays) do
+        if not _totemActiveSet[btn] then overlay:Hide() end
+    end
+
+    -- Size container
+    local maxButtons = 5
+    local maxW = iconSize * maxButtons + spacing * (maxButtons - 1)
+    totemBarFrame:SetSize(maxW, iconSize)
+end
+
+local function BuildTotemBar()
+    local tb = GetTotemSettings()
+    if not tb then return end
+
+    -- enabledClasses nil = disabled; table with class keys = enabled for those classes
+    local ec = tb.enabledClasses
+    local _, classFile = UnitClass("player")
+    local active = ec and classFile and ec[classFile]
+
+    if not active then
+        if totemBarFrame then
+            EllesmereUI.SetElementVisibility(totemBarFrame, false)
+        end
+        -- Restore TotemFrame to original parent
+        if TotemFrame and _totemOrigParent and not InCombatLockdown() then
+            TotemFrame:SetParent(_totemOrigParent)
+            TotemFrame:ClearAllPoints()
+            TotemFrame:SetPoint("BOTTOM", UIParent, "BOTTOM", 0, 155)
+        end
+        return
+    end
+
+    if not totemBarFrame then
+        totemBarFrame = CreateFrame("Frame", "ERB_TotemBarFrame", UIParent)
+        totemBarFrame:SetFrameStrata("MEDIUM")
+        totemBarFrame:SetFrameLevel(15)
+        totemBarFrame:SetSize(120, 30)
+        -- Re-register unlock elements so unlock mode picks up the new frame
+        if _G._ERB_RegisterUnlock then _G._ERB_RegisterUnlock() end
+    end
+
+    -- Save original parent for restore on disable
+    if TotemFrame and not _totemOrigParent then
+        _totemOrigParent = TotemFrame:GetParent()
+    end
+
+    -- Position our container
+    if tb.unlockPos and tb.unlockPos.point then
+        if not EllesmereUI._unlockActive then
+            local PP = EllesmereUI and EllesmereUI.PP
+            local px, py = tb.unlockPos.x or 0, tb.unlockPos.y or 0
+            if PP and PP.SnapForES then
+                local es = totemBarFrame:GetEffectiveScale()
+                px = PP.SnapForES(px, es)
+                py = PP.SnapForES(py, es)
+            end
+            totemBarFrame:ClearAllPoints()
+            totemBarFrame:SetPoint(tb.unlockPos.point, UIParent,
+                tb.unlockPos.relPoint or tb.unlockPos.point, px, py)
+        end
+    else
+        if not EllesmereUI._unlockActive then
+            totemBarFrame:ClearAllPoints()
+            -- Default: left-aligned 5px below the player unit frame
+            local playerUF = _G["oUF_EllesmerePlayer"]
+            if playerUF and playerUF:IsShown() then
+                totemBarFrame:SetPoint("TOPLEFT", playerUF, "BOTTOMLEFT", 0, -5)
+            else
+                totemBarFrame:SetPoint("CENTER", UIParent, "CENTER", 0, -120)
+            end
+        end
+    end
+
+    EllesmereUI.SetElementVisibility(totemBarFrame, true)
+
+    -- Invalidate layout cache so next LayoutTotemBar re-applies scale
+    _totemLayoutCache.iconScale = nil
+    _totemLayoutCache.spacing = nil
+
+    -- Hook Blizzard updates (once)
+    if not _totemHooked and TotemFrame then
+        _totemHooked = true
+        local function OnTotemUpdate()
+            local s = GetTotemSettings()
+            if s and s.enabledClasses then LayoutTotemBar() end
+        end
+        hooksecurefunc(TotemFrame, "Update", OnTotemUpdate)
+        TotemFrame:HookScript("OnShow", OnTotemUpdate)
+        if TotemButtonMixin then
+            hooksecurefunc(TotemButtonMixin, "OnLoad", function()
+                C_Timer.After(0, OnTotemUpdate)
+            end)
+        end
+    end
+
+    LayoutTotemBar()
+end
+
+-------------------------------------------------------------------------------
 --  Master Apply
 -------------------------------------------------------------------------------
 function ERB:ApplyAll()
@@ -4394,6 +4684,7 @@ function ERB:ApplyAll()
     BuildMainFrame()
     BuildBars()
     BuildCastBar()
+    BuildTotemBar()
     UpdateHealthBar()
     UpdatePrimaryBar()
     UpdateSecondaryResource()

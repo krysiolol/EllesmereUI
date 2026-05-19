@@ -4210,7 +4210,13 @@ _CDMApplyVisibility = function()
                     end
                 end
                 if wasHidden then
-                    LayoutCDMBar(barData.key)
+                    -- Defer to a clean execution context: event handlers
+                    -- (PLAYER_TARGET_CHANGED, mount events, etc.) can carry
+                    -- taint from the Blizzard dispatch chain. LayoutCDMBar
+                    -- calls SetSize/SetPoint which propagates the taint and
+                    -- triggers ADDON_ACTION_BLOCKED.
+                    local bk = barData.key
+                    C_Timer.After(0, function() LayoutCDMBar(bk) end)
                 end
             end
 

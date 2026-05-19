@@ -1266,59 +1266,36 @@ local function PopulatePreview(bar, curSession, curSessionID, curDMType)
     return true
 end
 
-local _ttLastGUID, _ttLastSession, _ttLastSessionID, _ttLastDMType
-local _ttLastScale, _ttLastAnchor
+local _ttLastScale
 
 local function HideBarTooltip()
     if _ttFrame then _ttFrame:Hide() end
-    _ttLastGUID = nil; _ttLastAnchor = nil
 end
 
 local function ShowBarTooltip(bar, curSession, curSessionID, curDMType)
-
     local cfg = DB()
     if cfg.showHoverTooltip == false then return end
     EnsureTooltipFrame()
-    local barRow = bar.row
-    local anchorMode = cfg.breakdownAnchorPoint
-    local desiredAnchor = (anchorMode == "center") and "CENTER" or barRow
-    -- Skip full rebuild if tooltip is already populated for this exact player + session
-    local barGUID = bar._srcGUID
-    if barGUID == _ttLastGUID and curSession == _ttLastSession and curSessionID == _ttLastSessionID and curDMType == _ttLastDMType then
-        if _ttLastAnchor ~= desiredAnchor then
-            _ttFrame:ClearAllPoints()
-            if desiredAnchor == "CENTER" then
-                _ttFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-                _ttLastAnchor = "CENTER"
-            else
-                _ttFrame:SetPoint("BOTTOMRIGHT", barRow, "TOPRIGHT", 0, 0)
-                _ttLastAnchor = barRow
-            end
-        end
-        _ttFrame:Show()
-    
-        return
-    end
+
+    -- Always rebuild from fresh data (no GUID cache).
+    -- PopulatePreview costs ~0.5ms which is fine for a hover action.
     if PopulatePreview(bar, curSession, curSessionID, curDMType) then
-        _ttLastGUID = barGUID; _ttLastSession = curSession; _ttLastSessionID = curSessionID; _ttLastDMType = curDMType
         local scale = (cfg.hoverTooltipScale or 100) / 100
         if scale ~= _ttLastScale then
             _ttFrame:SetScale(scale)
             _ttLastScale = scale
         end
         _ttFrame:ClearAllPoints()
+        local anchorMode = cfg.breakdownAnchorPoint
         if anchorMode == "center" then
             _ttFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-            _ttLastAnchor = "CENTER"
         else
-            _ttFrame:SetPoint("BOTTOMRIGHT", barRow, "TOPRIGHT", 0, 0)
-            _ttLastAnchor = barRow
+            _ttFrame:SetPoint("BOTTOMRIGHT", bar.row, "TOPRIGHT", 0, 0)
         end
         _ttFrame:Show()
     else
         HideBarTooltip()
     end
-
 end
 
 local _hoverPollFrame = CreateFrame("Frame")
