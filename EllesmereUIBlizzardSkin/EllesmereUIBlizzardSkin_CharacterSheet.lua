@@ -2796,10 +2796,23 @@ local function SkinCharacterSheet()
         local searchText = (titlesSearchBox:GetText() or ""):lower()
         local yOffset = 0
 
-        -- Sort keys so layout order is deterministic; "No Title" first.
+        -- Sort alphabetically by title name; "No Title" (-1) is pinned first.
+        -- Title names carry a "%s" player-name placeholder (prefix or suffix) plus
+        -- surrounding spaces; strip them so the sort keys on the meaningful word
+        -- (e.g. "%s the Kingslayer" -> "the kingslayer", "Bloodsail Admiral %s"
+        -- -> "bloodsail admiral").
+        local function SortKey(idx)
+            local name = titleButtons[idx].btn._titleName or ""
+            name = name:gsub("%%s", " "):gsub("^%s+", ""):gsub("%s+$", "")
+            return name:lower()
+        end
         local ordered = {}
         for idx in pairs(titleButtons) do ordered[#ordered + 1] = idx end
-        table.sort(ordered)
+        table.sort(ordered, function(a, b)
+            if a == -1 then return true end
+            if b == -1 then return false end
+            return SortKey(a) < SortKey(b)
+        end)
 
         for _, idx in ipairs(ordered) do
             local btnData = titleButtons[idx]
