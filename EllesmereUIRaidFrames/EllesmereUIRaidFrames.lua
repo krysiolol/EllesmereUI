@@ -2311,6 +2311,25 @@ local function StyleButton(button)
         local spc = PixelSnap(s.debuffSpacing or 1)
         local spacing = sz + spc
 
+        -- Custom "Center → Left → Right" positioning:
+        -- Icon 1: centered on health bar
+        -- Icon 2: left of icon 1
+        -- Icon 3+: chained right from previous
+        if pos == "centerleftright" then
+            local total = visibleCount or #d.debuffIcons
+            for i, icon in ipairs(d.debuffIcons) do
+                icon:ClearAllPoints()
+                if i == 1 then
+                    icon:SetPoint("CENTER", health, "CENTER", ox, oy)
+                elseif i == 2 then
+                    icon:SetPoint("RIGHT", d.debuffIcons[1], "LEFT", -spc, 0)
+                else
+                    icon:SetPoint("LEFT", d.debuffIcons[i - 1], "RIGHT", spc, 0)
+                end
+            end
+            return
+        end
+
         -- CENTER growth: offset so visible icons are centered on anchor
         local centerOff = 0
         if grow == "CENTER" and visibleCount and visibleCount > 0 then
@@ -3835,46 +3854,69 @@ local function RegisterPrivateAuraSlots(button, unit)
     local parentStrata = button:GetFrameStrata()
     local fixedStrata = PA_STRATA_FIX[parentStrata] or "DIALOG"
 
-    for i, paFrame in ipairs(d.privateAuraFrames) do
-        paFrame:SetSize(slotSz, slotSz)
-        paFrame:SetFrameStrata(fixedStrata)
-        paFrame:SetFrameLevel(button:GetFrameLevel() + ns.LVL_AURA)
-        paFrame:ClearAllPoints()
+    -- Custom "Center → Left → Right" positioning for private auras:
+    -- Icon 1: centered on health bar
+    -- Icon 2: left of icon 1
+    -- Icon 3+: chained right from previous
+    if pos == "centerleftright" then
+        for i, paFrame in ipairs(d.privateAuraFrames) do
+            paFrame:SetSize(slotSz, slotSz)
+            paFrame:SetFrameStrata(fixedStrata)
+            paFrame:SetFrameLevel(button:GetFrameLevel() + ns.LVL_AURA)
+            paFrame:ClearAllPoints()
 
-        if i == 1 then
-            -- Private auras anchor flush to the health bar edge (no 1px inset),
-            -- matching the debuff/role icon displays.
-            if pos == "topleft" then
-                paFrame:SetPoint("TOPLEFT", health, "TOPLEFT", ox, oy)
-            elseif pos == "top" then
-                paFrame:SetPoint("TOP", health, "TOP", ox, oy)
-            elseif pos == "topright" then
-                paFrame:SetPoint("TOPRIGHT", health, "TOPRIGHT", ox, oy)
-            elseif pos == "left" then
-                paFrame:SetPoint("LEFT", health, "LEFT", ox, oy)
-            elseif pos == "center" then
+            if i == 1 then
                 paFrame:SetPoint("CENTER", health, "CENTER", ox, oy)
-            elseif pos == "right" then
-                paFrame:SetPoint("RIGHT", health, "RIGHT", ox, oy)
-            elseif pos == "bottomright" then
-                paFrame:SetPoint("BOTTOMRIGHT", health, "BOTTOMRIGHT", ox, oy)
-            elseif pos == "bottom" then
-                paFrame:SetPoint("BOTTOM", health, "BOTTOM", ox, oy)
+            elseif i == 2 then
+                paFrame:SetPoint("RIGHT", d.privateAuraFrames[1], "LEFT", -spc, 0)
             else
-                paFrame:SetPoint("BOTTOMLEFT", health, "BOTTOMLEFT", ox, oy)
+                paFrame:SetPoint("LEFT", d.privateAuraFrames[i - 1], "RIGHT", spc, 0)
             end
-        else
-            local prev = d.privateAuraFrames[i - 1]
-            if grow == "RIGHT" then
-                paFrame:SetPoint("LEFT", prev, "RIGHT", spc, 0)
-            elseif grow == "LEFT" then
-                paFrame:SetPoint("RIGHT", prev, "LEFT", -spc, 0)
-            elseif grow == "UP" then
-                paFrame:SetPoint("BOTTOM", prev, "TOP", 0, spc)
-            elseif grow == "DOWN" then
-                paFrame:SetPoint("TOP", prev, "BOTTOM", 0, -spc)
+            paFrame:Show()
+        end
+    else
+        for i, paFrame in ipairs(d.privateAuraFrames) do
+            paFrame:SetSize(slotSz, slotSz)
+            paFrame:SetFrameStrata(fixedStrata)
+            paFrame:SetFrameLevel(button:GetFrameLevel() + ns.LVL_AURA)
+            paFrame:ClearAllPoints()
+
+            if i == 1 then
+                -- Private auras anchor flush to the health bar edge (no 1px inset),
+                -- matching the debuff/role icon displays.
+                if pos == "topleft" then
+                    paFrame:SetPoint("TOPLEFT", health, "TOPLEFT", ox, oy)
+                elseif pos == "top" then
+                    paFrame:SetPoint("TOP", health, "TOP", ox, oy)
+                elseif pos == "topright" then
+                    paFrame:SetPoint("TOPRIGHT", health, "TOPRIGHT", ox, oy)
+                elseif pos == "left" then
+                    paFrame:SetPoint("LEFT", health, "LEFT", ox, oy)
+                elseif pos == "center" then
+                    paFrame:SetPoint("CENTER", health, "CENTER", ox, oy)
+                elseif pos == "right" then
+                    paFrame:SetPoint("RIGHT", health, "RIGHT", ox, oy)
+                elseif pos == "bottomright" then
+                    paFrame:SetPoint("BOTTOMRIGHT", health, "BOTTOMRIGHT", ox, oy)
+                elseif pos == "bottom" then
+                    paFrame:SetPoint("BOTTOM", health, "BOTTOM", ox, oy)
+                else
+                    paFrame:SetPoint("BOTTOMLEFT", health, "BOTTOMLEFT", ox, oy)
+                end
+            else
+                local prev = d.privateAuraFrames[i - 1]
+                if grow == "RIGHT" then
+                    paFrame:SetPoint("LEFT", prev, "RIGHT", spc, 0)
+                elseif grow == "LEFT" then
+                    paFrame:SetPoint("RIGHT", prev, "LEFT", -spc, 0)
+                elseif grow == "UP" then
+                    paFrame:SetPoint("BOTTOM", prev, "TOP", 0, spc)
+                elseif grow == "DOWN" then
+                    paFrame:SetPoint("TOP", prev, "BOTTOM", 0, -spc)
+                end
             end
         end
+    end
 
         paFrame:Show()
 
@@ -8597,6 +8639,34 @@ local function PvAuraAnchor(icon, f, auraType, slot, totalShown)
     end
     icon:SetSize(sz, sz)
     icon:ClearAllPoints()
+
+    -- Custom "Center → Left → Right" positioning:
+    -- Icon 1 (slot 0): centered on health bar
+    -- Icon 2 (slot 1): left of icon 1
+    -- Icon 3+ (slot 2+): chained right from previous
+    if pos == "centerleftright" then
+        if slot == 0 then
+            icon:SetPoint("CENTER", f._health, "CENTER", ox, oy)
+        elseif slot == 1 then
+            local pool = auraType == "def" and f._pvDefs
+                or auraType == "pa" and f._pvPA
+                or f._pvDebuffs
+            local prev = pool[1] -- slot 0 icon
+            if prev and prev:IsShown() then
+                icon:SetPoint("RIGHT", prev, "LEFT", -spc, 0)
+            end
+        else
+            local pool = auraType == "def" and f._pvDefs
+                or auraType == "pa" and f._pvPA
+                or f._pvDebuffs
+            local prev = pool[slot] -- slot is 1-based, current is slot+1
+            if prev and prev:IsShown() then
+                icon:SetPoint("LEFT", prev, "RIGHT", spc, 0)
+            end
+        end
+        return
+    end
+
     if slot == 0 then
         local fx = ox + (grow == "CENTER" and centerOff or 0)
         -- All aura icon previews (debuffs, defensives, private auras) anchor flush

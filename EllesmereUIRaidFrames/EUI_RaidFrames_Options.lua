@@ -4752,26 +4752,33 @@ initFrame:SetScript("OnEvent", function(self)
         end  -- close do (eyeball)
 
         local paPosValues = {
-            topleft     = "Top Left",
-            top         = "Top",
-            topright    = "Top Right",
-            left        = "Left",
-            center      = "Center",
-            right       = "Right",
-            bottomleft  = "Bottom Left",
-            bottom      = "Bottom",
-            bottomright = "Bottom Right",
+            topleft          = "Top Left",
+            top              = "Top",
+            topright         = "Top Right",
+            left             = "Left",
+            center           = "Center",
+            right            = "Right",
+            bottomleft       = "Bottom Left",
+            bottom           = "Bottom",
+            bottomright      = "Bottom Right",
+            centerleftright  = "Center → Left → Right",
         }
-        local paPosOrder = { "topleft", "top", "topright", "left", "center", "right", "bottomleft", "bottom", "bottomright" }
+        local paPosOrder = { "topleft", "top", "topright", "left", "center", "right", "bottomleft", "bottom", "bottomright", "centerleftright" }
         local paGrowValues = { RIGHT = "Right", LEFT = "Left", UP = "Up", DOWN = "Down" }
         local paGrowOrder = { "RIGHT", "LEFT", "UP", "DOWN" }
 
         local function GetDefaultPaGrow(pos)
+            if pos == "centerleftright" then return "CENTERLEFTRIGHT" end
             if pos == "right" or pos == "topright" or pos == "bottomright" then return "LEFT" end
             if pos == "left" or pos == "topleft" or pos == "bottomleft" then return "RIGHT" end
             if pos == "top" then return "DOWN" end
             if pos == "bottom" then return "UP" end
             return "RIGHT"
+        end
+
+        -- Helper: growth dropdown disabled when position is centerleftright
+        local function PaGrowthOff()
+            return SVal("paPosition", "center") == "centerleftright"
         end
 
         -- Row 1: Position (+ cog X/Y) | Growth Direction
@@ -4785,6 +4792,8 @@ initFrame:SetScript("OnEvent", function(self)
                   EllesmereUI:RefreshPage()
               end },
             { type="dropdown", text="Growth Direction", values=paGrowValues, order=paGrowOrder,
+              disabled=PaGrowthOff,
+              disabledTooltip=function() return SVal("paPosition", "center") == "centerleftright" and "Position handles growth" end,
               getValue=function() return SVal("paGrowDirection", "RIGHT") end,
               setValue=function(v) SSet("paGrowDirection", v) end });  y = y - h
         ns._editTargets = ns._editTargets or {}
@@ -4917,27 +4926,34 @@ initFrame:SetScript("OnEvent", function(self)
 
         -- Row 2: Debuff Position (+ cog for X/Y) | Growth Direction
         local debuffPositionValues = {
-            topleft     = "Top Left",
-            top         = "Top",
-            topright    = "Top Right",
-            left        = "Left",
-            center      = "Center",
-            right       = "Right",
-            bottomleft  = "Bottom Left",
-            bottom      = "Bottom",
-            bottomright = "Bottom Right",
+            topleft          = "Top Left",
+            top              = "Top",
+            topright         = "Top Right",
+            left             = "Left",
+            center           = "Center",
+            right            = "Right",
+            bottomleft       = "Bottom Left",
+            bottom           = "Bottom",
+            bottomright      = "Bottom Right",
+            centerleftright  = "Center → Left → Right",
         }
-        local debuffPositionOrder = { "topleft", "top", "topright", "left", "center", "right", "bottomleft", "bottom", "bottomright" }
+        local debuffPositionOrder = { "topleft", "top", "topright", "left", "center", "right", "bottomleft", "bottom", "bottomright", "centerleftright" }
 
         local debuffGrowValues = { RIGHT = "Right", LEFT = "Left", UP = "Up", DOWN = "Down", CENTER = "Center" }
         local debuffGrowOrder = { "RIGHT", "LEFT", "UP", "DOWN", "CENTER" }
 
         local function GetDefaultDebuffGrow(pos)
+            if pos == "centerleftright" then return "CENTERLEFTRIGHT" end
             if pos == "right" or pos == "topright" or pos == "bottomright" then return "LEFT" end
             if pos == "left" or pos == "topleft" or pos == "bottomleft" then return "RIGHT" end
             if pos == "top" then return "DOWN" end
             if pos == "bottom" then return "UP" end
             return "RIGHT"
+        end
+
+        -- Helper: growth dropdown disabled when debuff filter off OR position is centerleftright
+        local function DebuffGrowthOff()
+            return SVal("debuffFilter", "all") == "none" or SVal("debuffPosition", "bottomleft") == "centerleftright"
         end
 
         row, h = W:DualRow(parent, y,
@@ -4951,7 +4967,8 @@ initFrame:SetScript("OnEvent", function(self)
                   EllesmereUI:RefreshPage()
               end },
             { type="dropdown", text="Growth Direction", values=debuffGrowValues, order=debuffGrowOrder,
-              disabled=function() return SVal("debuffFilter", "all") == "none" end,
+              disabled=DebuffGrowthOff,
+              disabledTooltip=function() return SVal("debuffPosition", "bottomleft") == "centerleftright" and "Position handles growth" or "Show Debuffs" end,
               disabledTooltip="Show Debuffs",
               getValue=function() return SVal("debuffGrowDirection", "RIGHT") end,
               setValue=function(v) SSet("debuffGrowDirection", v) end });  y = y - h
