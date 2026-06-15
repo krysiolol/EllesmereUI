@@ -3873,6 +3873,34 @@ local function RegisterPrivateAuraSlots(button, unit)
                 paFrame:SetPoint("LEFT", d.privateAuraFrames[i - 1], "RIGHT", spc, 0)
             end
             paFrame:Show()
+
+            -- Register per-slot anchor
+            local iconInfoTbl = {
+                iconWidth  = sz,
+                iconHeight = sz,
+                iconAnchor = {
+                    point         = "CENTER",
+                    relativeTo    = paFrame,
+                    relativePoint = "CENTER",
+                    offsetX       = 0,
+                    offsetY       = 0,
+                },
+            }
+            iconInfoTbl.borderScale = sz / 32 * 2
+            local ok, anchorID = pcall(function()
+                return C_UnitAuras_AddPrivateAuraAnchor({
+                    unitToken     = unit,
+                    auraIndex     = i,
+                    parent        = paFrame,
+                    isContainer   = false,
+                    showCountdownFrame   = true,
+                    showCountdownNumbers = showCD,
+                    iconInfo = iconInfoTbl,
+                })
+            end)
+            if ok and anchorID then
+                d.privateAuraAnchorIDs[i] = anchorID
+            end
         end
     else
         for i, paFrame in ipairs(d.privateAuraFrames) do
@@ -3915,41 +3943,35 @@ local function RegisterPrivateAuraSlots(button, unit)
                     paFrame:SetPoint("TOP", prev, "BOTTOM", 0, -spc)
                 end
             end
-        end
-    end
+            paFrame:Show()
 
-        paFrame:Show()
-
-        -- Register per-slot anchor
-        local iconInfoTbl = {
-            iconWidth  = sz,
-            iconHeight = sz,
-            iconAnchor = {
-                point         = "CENTER",
-                relativeTo    = paFrame,
-                relativePoint = "CENTER",
-                offsetX       = 0,
-                offsetY       = 0,
-            },
-        }
-        -- Scale Blizzard's native border 1:1 to OUR icon size. The border art is
-        -- authored for a 32px icon, so iconSize/32*2 makes it fit any size. Letting 
-        -- Blizzard draw the border also means empty slots show nothing. the border
-        -- only appears when Blizzard actually renders an icon there.
-        iconInfoTbl.borderScale = sz / 32 * 2
-        local ok, anchorID = pcall(function()
-            return C_UnitAuras_AddPrivateAuraAnchor({
-                unitToken     = unit,
-                auraIndex     = i,
-                parent        = paFrame,
-                isContainer   = false,
-                showCountdownFrame   = true,
-                showCountdownNumbers = showCD,
-                iconInfo = iconInfoTbl,
-            })
-        end)
-        if ok and anchorID then
-            d.privateAuraAnchorIDs[i] = anchorID
+            -- Register per-slot anchor
+            local iconInfoTbl = {
+                iconWidth  = sz,
+                iconHeight = sz,
+                iconAnchor = {
+                    point         = "CENTER",
+                    relativeTo    = paFrame,
+                    relativePoint = "CENTER",
+                    offsetX       = 0,
+                    offsetY       = 0,
+                },
+            }
+            iconInfoTbl.borderScale = sz / 32 * 2
+            local ok, anchorID = pcall(function()
+                return C_UnitAuras_AddPrivateAuraAnchor({
+                    unitToken     = unit,
+                    auraIndex     = i,
+                    parent        = paFrame,
+                    isContainer   = false,
+                    showCountdownFrame   = true,
+                    showCountdownNumbers = showCD,
+                    iconInfo = iconInfoTbl,
+                })
+            end)
+            if ok and anchorID then
+                d.privateAuraAnchorIDs[i] = anchorID
+            end
         end
     end
     d.privateAuraUnit = unit
